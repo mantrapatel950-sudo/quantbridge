@@ -681,9 +681,9 @@ export const BrokerSecurityView: React.FC<Props> = ({
           </div>
 
           <div className="space-y-4 text-xs">
-            {/* Exchange Dropdown */}
+            {/* Exchange Dropdown & Quick Selector */}
             <div>
-              <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center justify-between mb-2">
                 <label className="text-slate-300 font-semibold">Select Crypto Exchange or Brokerage</label>
                 <button
                   type="button"
@@ -695,6 +695,38 @@ export const BrokerSecurityView: React.FC<Props> = ({
                 </button>
               </div>
 
+              {/* Quick Select Pill Buttons */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 mb-3">
+                {SUPPORTED_EXCHANGES.map((ex) => {
+                  const isSelected = selectedBroker.toLowerCase() === ex.id.toLowerCase() || selectedBroker.toLowerCase() === ex.name.toLowerCase();
+                  return (
+                    <button
+                      key={ex.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedBroker(ex.id);
+                        if (onSwitchActiveBroker) onSwitchActiveBroker(ex.id);
+                      }}
+                      className={`px-2.5 py-2 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                        isSelected
+                          ? 'bg-slate-800 border-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.25)] ring-1 ring-emerald-500'
+                          : 'bg-slate-950/70 border-slate-800/80 hover:bg-slate-800/50 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span className={`text-xs font-bold ${isSelected ? 'text-emerald-300' : 'text-slate-200'}`}>
+                          {ex.name}
+                        </span>
+                        {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+                      </div>
+                      <span className="text-[10px] text-slate-400 truncate mt-0.5">
+                        {ex.type}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
               <select
                 value={selectedBroker}
                 onChange={(e) => {
@@ -704,9 +736,11 @@ export const BrokerSecurityView: React.FC<Props> = ({
                 }}
                 className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2.5 text-slate-100 font-semibold text-xs focus:outline-none focus:border-emerald-500 transition-colors"
               >
-                <optgroup label="Crypto Exchanges (Spot & Derivatives)">
+                <optgroup label="Crypto Exchanges (Spot, Futures & Derivatives)">
                   <option value="Binance">Binance (Spot & USDT-M Futures API)</option>
                   <option value="Bybit">Bybit (V5 Unified Trading & Derivatives)</option>
+                  <option value="Delta">Delta Exchange (Perpetual Futures & Options)</option>
+                  <option value="SharkExchange">Shark Exchange (Futures & INR Margin)</option>
                   <option value="OKX">OKX (V5 Spot, Swap & Futures)</option>
                   <option value="Coinbase">Coinbase Advanced Trade API</option>
                   <option value="KuCoin">KuCoin (Spot & Futures API)</option>
