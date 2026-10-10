@@ -293,3 +293,17 @@ export async function backtestStrategy(id: string): Promise<any> {
   return data.result;
 }
 
+export async function fetchGitSyncStatus(): Promise<any> {
+  const res = await authFetch('/api/system/git-status');
+  if (!res.ok) throw new Error('Failed to fetch git status');
+  return res.json();
+}
+
+export async function triggerGitPull(): Promise<any> {
+  const res = await authFetch('/api/system/git-pull', { method: 'POST' });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Failed to pull updates from GitHub');
+  return data;
+}
+
+

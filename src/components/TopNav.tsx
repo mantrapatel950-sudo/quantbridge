@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Volume2, VolumeX, Clock, Cpu, Activity, Bell, BellOff, BellRing, LogOut, Wallet, Zap } from 'lucide-react';
+import { ShieldAlert, Volume2, VolumeX, Clock, Cpu, Activity, Bell, BellOff, BellRing, LogOut, Wallet, Zap, Cloud } from 'lucide-react';
 import { setTerminalMuted } from '../utils/audioAlerts';
 import { MarketTickerTape } from './MarketTickerTape';
 
@@ -46,6 +46,14 @@ export const TopNav: React.FC<Props> = ({
 }) => {
   const [utcTime, setUtcTime] = useState('');
   const [isMuted, setIsMuted] = useState(false);
+  const [gitStatus, setGitStatus] = useState<{
+    hasRemoteUpdate?: boolean;
+    currentCommit?: string;
+    remoteCommit?: string;
+    isPulling?: boolean;
+    statusMessage?: string;
+  }>({});
+  const [isUpdatingGit, setIsUpdatingGit] = useState(false);
 
   useEffect(() => {
     const updateTime = () => {
@@ -55,6 +63,22 @@ export const TopNav: React.FC<Props> = ({
     updateTime();
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Poll GitHub auto-sync status every 20s
+  useEffect(() => {
+    const checkGit = async () => {
+      try {
+        const res = await fetch('/api/system/git-status');
+        if (res.ok) {
+          const data = await res.json();
+          setGitStatus(data);
+        }
+      } catch {}
+    };
+    checkGit();
+    const timer = setInterval(checkGit, 20000);
+    return () => clearInterval(timer);
   }, []);
 
   const toggleSound = () => {
@@ -245,6 +269,48 @@ export const TopNav: React.FC<Props> = ({
             title={isMuted ? 'Unmute Audio Cues' : 'Mute Audio Cues'}
           >
             {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5 text-emerald-400" />}
+          </button>
+
+          {/* GitHub Continuous Auto-Sync Pill Button */}
+          <button
+            onClick={async () => {
+              setIsUpdatingGit(true);
+              try {
+                const res = await fetch('/api/system/git-pull', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                  setGitStatus(data);
+                  alert(`✅ QuantBridge updated to latest version (${data.currentCommit})! Reloading...`);
+                  window.location.reload();
+                } else {
+                  alert(`Notice: ${data.error || 'Already on latest version'}`);
+                }
+              } catch (e: any) {
+                alert(`Git check: ${e.message}`);
+              } finally {
+                setIsUpdatingGit(false);
+              }
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-mono transition-all cursor-pointer ${
+              gitStatus.hasRemoteUpdate
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse shadow-[0_0_10px_rgba(245,158,11,0.3)]'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+            }`}
+            title={
+              gitStatus.hasRemoteUpdate
+                ? '⚡ New version available on GitHub! Click to update now.'
+                : `Continuous GitHub Auto-Sync: Active (${gitStatus.currentCommit || 'Live'})`
+            }
+          >
+            <Cloud className={`w-3.5 h-3.5 ${gitStatus.hasRemoteUpdate ? 'text-amber-400' : 'text-emerald-400'}`} />
+            <span className="hidden sm:inline text-[11px] font-sans font-medium">
+              {isUpdatingGit ? 'Updating...' : gitStatus.hasRemoteUpdate ? 'Update Available' : 'Auto-Sync'}
+            </span>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                gitStatus.hasRemoteUpdate ? 'bg-amber-400 animate-ping' : 'bg-emerald-400 animate-pulse'
+              }`}
+            />
           </button>
 
           {/* Sign Out Button */}

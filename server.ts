@@ -2,6 +2,9 @@ import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
 import crypto from 'crypto';
+import { exec } from 'child_process';
+import util from 'util';
+const execAsync = util.promisify(exec);
 import { GoogleGenAI } from '@google/genai';
 import { generateCandles } from './src/utils/marketData';
 import { 
@@ -2517,6 +2520,136 @@ app.post('/api/algo/strategies/:id/backtest', (req: Request, res: Response) => {
 app.post('/api/webhook/rotate-token', (req: Request, res: Response) => {
   webhookSecret = 'qb_sec_' + crypto.randomBytes(6).toString('hex');
   res.json({ success: true, webhookSecret });
+});
+
+// ======================================================================
+// 🚀 QUANTBRIDGE CONTINUOUS AUTO-SYNC & AUTO-UPDATE ENGINE
+// ======================================================================
+let gitSyncState = {
+  isChecking: false,
+  isPulling: false,
+  isPushing: false,
+  lastSyncedAt: new Date().toISOString(),
+  currentCommit: '',
+  remoteCommit: '',
+  statusMessage: 'In sync with GitHub',
+  hasRemoteUpdate: false,
+  autoSyncEnabled: true,
+};
+
+async function checkAndSyncGit() {
+  if (gitSyncState.isChecking || gitSyncState.isPulling || gitSyncState.isPushing) return;
+  gitSyncState.isChecking = true;
+
+  try {
+    const { stdout: branchOut } = await execAsync('git branch --show-current');
+    const branch = branchOut.trim() || 'main';
+
+    const { stdout: statusOut } = await execAsync('git status --porcelain');
+    const hasLocalChanges = statusOut.trim().length > 0;
+
+    const { stdout: localShaOut } = await execAsync('git rev-parse --short HEAD');
+    gitSyncState.currentCommit = localShaOut.trim();
+
+    // Fetch latest remote commit quietly
+    await execAsync(`git fetch origin ${branch}`);
+
+    const { stdout: remoteShaOut } = await execAsync(`git rev-parse --short origin/${branch}`);
+    gitSyncState.remoteCommit = remoteShaOut.trim();
+
+    const isBehind = gitSyncState.currentCommit !== gitSyncState.remoteCommit;
+    gitSyncState.hasRemoteUpdate = isBehind;
+
+    // Automatically pull if another device/user pushed to GitHub
+    if (isBehind && !hasLocalChanges && gitSyncState.autoSyncEnabled) {
+      gitSyncState.isPulling = true;
+      console.log(`🚀 [Auto-Updater] New GitHub commit detected (${gitSyncState.remoteCommit}). Auto-pulling...`);
+      const { stdout: pullOut } = await execAsync(`git pull origin ${branch}`);
+      gitSyncState.lastSyncedAt = new Date().toISOString();
+      gitSyncState.statusMessage = `Updated to ${gitSyncState.remoteCommit}`;
+      gitSyncState.currentCommit = gitSyncState.remoteCommit;
+      gitSyncState.hasRemoteUpdate = false;
+      console.log(`✅ [Auto-Updater] Successfully updated: ${pullOut.trim()}`);
+    } else if (hasLocalChanges && gitSyncState.autoSyncEnabled && process.env.AUTO_PUSH === 'true') {
+      gitSyncState.isPushing = true;
+      console.log(`🔄 [Auto-Sync] Local modifications detected. Auto-pushing to GitHub...`);
+      await execAsync('git add -A');
+      await execAsync(`git commit -m "QuantBridge auto-sync: ${new Date().toISOString().slice(0, 19).replace('T', ' ')}"`);
+      await execAsync(`git push origin ${branch}`);
+      gitSyncState.lastSyncedAt = new Date().toISOString();
+      gitSyncState.statusMessage = 'Pushed changes to GitHub';
+      console.log(`✅ [Auto-Sync] Pushed to GitHub!`);
+    } else {
+      gitSyncState.statusMessage = isBehind ? 'New version available on GitHub' : 'In sync with GitHub';
+    }
+  } catch (err: any) {
+    gitSyncState.statusMessage = err.message ? err.message.split('\n')[0] : 'Git sync check paused';
+  } finally {
+    gitSyncState.isChecking = false;
+    gitSyncState.isPulling = false;
+    gitSyncState.isPushing = false;
+  }
+}
+
+// Check every 25 seconds in background
+setInterval(checkAndSyncGit, 25000);
+setTimeout(checkAndSyncGit, 3000);
+
+// API Endpoints for Git Auto-Sync
+app.get('/api/system/git-status', (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    ...gitSyncState,
+  });
+});
+
+app.post('/api/system/git-pull', async (req: Request, res: Response) => {
+  try {
+    gitSyncState.isPulling = true;
+    const { stdout: branchOut } = await execAsync('git branch --show-current');
+    const branch = branchOut.trim() || 'main';
+    await execAsync(`git fetch origin ${branch}`);
+    const { stdout: pullOut } = await execAsync(`git pull origin ${branch}`);
+    const { stdout: localShaOut } = await execAsync('git rev-parse --short HEAD');
+    gitSyncState.currentCommit = localShaOut.trim();
+    gitSyncState.hasRemoteUpdate = false;
+    gitSyncState.lastSyncedAt = new Date().toISOString();
+    gitSyncState.statusMessage = `Updated to ${gitSyncState.currentCommit}`;
+    res.json({
+      success: true,
+      message: `Updated to latest version (${gitSyncState.currentCommit})`,
+      output: pullOut.trim(),
+      ...gitSyncState,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    gitSyncState.isPulling = false;
+  }
+});
+
+app.post('/api/system/git-push', async (req: Request, res: Response) => {
+  try {
+    gitSyncState.isPushing = true;
+    const { stdout: branchOut } = await execAsync('git branch --show-current');
+    const branch = branchOut.trim() || 'main';
+    await execAsync('git add -A');
+    await execAsync(`git commit -m "QuantBridge manual sync: ${new Date().toISOString().slice(0, 19).replace('T', ' ')}"`);
+    await execAsync(`git push origin ${branch}`);
+    const { stdout: localShaOut } = await execAsync('git rev-parse --short HEAD');
+    gitSyncState.currentCommit = localShaOut.trim();
+    gitSyncState.lastSyncedAt = new Date().toISOString();
+    gitSyncState.statusMessage = 'Pushed changes to GitHub';
+    res.json({
+      success: true,
+      message: `Pushed commit ${gitSyncState.currentCommit} to GitHub`,
+      ...gitSyncState,
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    gitSyncState.isPushing = false;
+  }
 });
 
 // Mount Vite or static build
