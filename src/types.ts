@@ -12,6 +12,7 @@ export interface Trade {
   strategy: string;
   status: 'WIN' | 'LOSS';
   mode: 'DEMO' | 'REAL';
+  broker?: string;
   mfe?: number; // Max Favorable Excursion
   mae?: number; // Max Adverse Excursion
   slippage?: number;
@@ -71,6 +72,7 @@ export interface Position {
   trailingStopPercent?: number;
   highestPrice?: number;
   lowestPrice?: number;
+  broker?: string;
 }
 
 export interface WebhookLog {

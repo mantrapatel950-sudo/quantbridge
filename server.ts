@@ -40,6 +40,7 @@ export interface Trade {
   strategy: string;
   status: 'WIN' | 'LOSS';
   mode: 'DEMO' | 'REAL';
+  broker?: string;
 }
 
 export interface Position {
@@ -63,6 +64,7 @@ export interface Position {
   trailingStopPercent?: number;
   highestPrice?: number;
   lowestPrice?: number;
+  broker?: string;
 }
 
 export interface WebhookLog {
@@ -1080,6 +1082,8 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
     ? Number((price * (1 - (1 / leverage) * 0.9)).toFixed(2))
     : Number((price * (1 + (1 / leverage) * 0.9)).toFixed(2));
 
+  const executionBroker = payload.broker || (tradingMode === 'DEMO' ? 'Virtual Paper Broker' : (brokerConfig.broker || 'Binance'));
+
   const newPosition: Position = {
     id: `pos-${Date.now()}`,
     symbol,
@@ -1097,13 +1101,14 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
     leverage,
     margin: marginRequired,
     liquidationPrice: Math.max(0, liqPrice),
+    broker: executionBroker,
   };
 
   openPositions.unshift(newPosition);
   syncInsertPosition(newPosition);
   persistPositions();
 
-  const logMsg = `FILLED ${signal} ${qty} ${symbol} @ $${price} via ${tradingMode === 'DEMO' ? 'Virtual Paper Broker' : brokerConfig.broker + ' Direct API'}`;
+  const logMsg = `FILLED ${signal} ${qty} ${symbol} @ $${price} via ${tradingMode === 'DEMO' ? 'Virtual Paper Broker' : executionBroker + ' Direct API'}`;
   const log: WebhookLog = {
     id: `log-${Date.now()}`,
     timestamp: new Date().toISOString(),
@@ -1119,7 +1124,7 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
     success: true,
     executionId: newPosition.id,
     mode: tradingMode,
-    broker: tradingMode === 'DEMO' ? 'Virtual Broker' : brokerConfig.broker,
+    broker: executionBroker,
     order: {
       symbol,
       side: newPosition.side,
