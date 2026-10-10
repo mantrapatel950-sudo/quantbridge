@@ -16,10 +16,10 @@
     "apiSecretMasked": "SK••••••••••••••••••••••••nQrH",
     "isSandbox": false,
     "status": "CONNECTED",
-    "lastPingMs": 789,
+    "lastPingMs": 1284,
     "encryptionStandard": "AES-256-GCM",
     "accountType": "FUTURES",
-    "lastSyncedAt": "2026-10-10T16:05:21.803Z",
+    "lastSyncedAt": "2026-10-10T17:17:38.394Z",
     "assetBreakdown": [],
     "connectedAccounts": [
       {

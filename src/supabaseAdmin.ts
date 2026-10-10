@@ -2,11 +2,21 @@ import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+const rawUrl = process.env.VITE_SUPABASE_URL || '';
+const rawKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  console.warn('⚠️ WARNING: Supabase URL or Service Role Key missing. Database sync will fail.');
+export const isSupabaseAdminConfigured = Boolean(
+  rawUrl &&
+  rawKey &&
+  !rawUrl.includes('placeholder') &&
+  rawUrl.startsWith('http')
+);
+
+const supabaseUrl = isSupabaseAdminConfigured ? rawUrl : 'https://placeholder.supabase.co';
+const supabaseServiceKey = isSupabaseAdminConfigured ? rawKey : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.placeholder';
+
+if (!isSupabaseAdminConfigured) {
+  console.log('ℹ️ Running in local standalone mode (Supabase cloud sync is disabled).');
 }
 
 // Service role client bypasses RLS for the backend engine
@@ -16,3 +26,4 @@ export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
     persistSession: false
   }
 });
+

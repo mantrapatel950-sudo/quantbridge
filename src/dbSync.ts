@@ -1,4 +1,4 @@
-import { supabaseAdmin } from './supabaseAdmin';
+import { supabaseAdmin, isSupabaseAdminConfigured } from './supabaseAdmin';
 import { Trade, Position, StrategyConfig, WebhookLog } from '../server';
 
 export let globalUserId: string | null = null;
@@ -8,6 +8,9 @@ export async function initializeDatabaseSync(
   setTrades: (trades: Trade[]) => void,
   setStrategies: (strategies: StrategyConfig[]) => void
 ) {
+  if (!isSupabaseAdminConfigured) {
+    return;
+  }
   try {
     // 1. Find the master user
     const { data: usersData, error: usersError } = await supabaseAdmin.auth.admin.listUsers();
