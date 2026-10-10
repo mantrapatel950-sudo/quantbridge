@@ -28,15 +28,17 @@ It connects external signal generators (such as **TradingView Pine Script alerts
 
 ---
 
-## Quick Start
+## Quick Start (Mac, Windows, Linux)
 
-### 1. Install Dependencies
+### 1. Clone & Install
 ```bash
+git clone https://github.com/mantrapatel950-sudo/quantbridge.git
+cd quantbridge
 npm install
 ```
 
 ### 2. Configure Environment (Optional)
-Copy `.env.example` to `.env` and fill in your Supabase or API keys if using cloud synchronization:
+Copy `.env.example` to `.env` if using Supabase or cloud synchronization (runs out of the box in local demo mode without it):
 ```bash
 cp .env.example .env
 ```
