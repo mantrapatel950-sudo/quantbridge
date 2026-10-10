@@ -11,3 +11,4 @@ coverage/
 # Sensitive Exchange API Keys & Accounts
 data/exchange_credentials.json
 data/exchange_accounts.json
+data/users/

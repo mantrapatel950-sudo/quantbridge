@@ -14,7 +14,7 @@ import {
   syncUpdateStrategy,
   syncDeleteStrategy
 } from './src/dbSync';
-import { loadFromFile, saveToFile } from './src/storage';
+import { loadFromFile, saveToFile, loadUserFile, saveUserFile } from './src/storage';
 import { verifyAndFetchBalance, ExchangeCredentials } from './src/services/exchangeService';
 
 
@@ -446,19 +446,102 @@ if (exchangeCredentials.apiKey) {
   saveToFile('exchange_accounts.json', allExchangeAccounts);
 }
 
-function getConnectedAccountsList(): any[] {
+function getRequestUserId(req: Request): string {
+  const customUserHeader = req.headers['x-user-id'];
+  if (typeof customUserHeader === 'string' && customUserHeader.trim()) {
+    return customUserHeader.trim();
+  }
+  return 'default';
+}
+
+function getUserExchangeCredentials(userId: string): StoredExchangeCredentials {
+  if (userId === 'default') {
+    return exchangeCredentials;
+  }
+  return loadUserFile<StoredExchangeCredentials>(userId, 'exchange_credentials.json', {
+    broker: 'Binance',
+    apiKey: '',
+    apiSecret: '',
+    isSandbox: false,
+    accountType: 'SPOT',
+  });
+}
+
+function saveUserExchangeCredentials(userId: string, creds: StoredExchangeCredentials): void {
+  if (userId === 'default') {
+    exchangeCredentials = creds;
+    saveToFile('exchange_credentials.json', exchangeCredentials);
+  } else {
+    saveUserFile(userId, 'exchange_credentials.json', creds);
+  }
+}
+
+function getUserExchangeAccounts(userId: string): Record<string, StoredExchangeCredentials> {
+  if (userId === 'default') {
+    return allExchangeAccounts;
+  }
+  return loadUserFile<Record<string, StoredExchangeCredentials>>(userId, 'exchange_accounts.json', {});
+}
+
+function saveUserExchangeAccounts(userId: string, accounts: Record<string, StoredExchangeCredentials>): void {
+  if (userId === 'default') {
+    allExchangeAccounts = accounts;
+    saveToFile('exchange_accounts.json', allExchangeAccounts);
+  } else {
+    saveUserFile(userId, 'exchange_accounts.json', accounts);
+  }
+}
+
+function getUserBrokerConfig(userId: string, includeConnectedAccounts = true): any {
+  if (userId === 'default') {
+    const config = { ...brokerConfig };
+    if (includeConnectedAccounts) {
+      config.connectedAccounts = getConnectedAccountsList('default');
+    }
+    return config;
+  }
+  const defaultUserBrokerConfig = {
+    broker: 'Binance',
+    status: 'DISCONNECTED',
+    isSandbox: false,
+    accountType: 'SPOT',
+    apiKeyMasked: '',
+    apiSecretMasked: '',
+    walletBalance: 0,
+    assetBreakdown: [],
+    lastPingMs: 0,
+  };
+  const config = loadUserFile<any>(userId, 'broker_config.json', defaultUserBrokerConfig);
+  if (includeConnectedAccounts) {
+    config.connectedAccounts = getConnectedAccountsList(userId);
+  }
+  return config;
+}
+
+function saveUserBrokerConfig(userId: string, config: any): void {
+  if (userId === 'default') {
+    brokerConfig = config;
+    persistAppState();
+  } else {
+    saveUserFile(userId, 'broker_config.json', config);
+  }
+}
+
+function getConnectedAccountsList(userId: string = 'default'): any[] {
+  const accounts = getUserExchangeAccounts(userId);
+  const cfg = getUserBrokerConfig(userId, false);
   const list: any[] = [];
-  for (const [brokerName, creds] of Object.entries(allExchangeAccounts)) {
+  for (const [brokerName, creds] of Object.entries(accounts)) {
     if (creds && creds.apiKey) {
       list.push({
         broker: brokerName,
         apiKeyMasked: creds.apiKey.length > 8 ? creds.apiKey.slice(0, 4) + '••••••••' + creds.apiKey.slice(-4) : '••••••••',
         isSandbox: creds.isSandbox,
         accountType: creds.accountType,
-        status: brokerName === brokerConfig.broker ? brokerConfig.status : 'CONFIGURED',
-        lastPingMs: brokerName === brokerConfig.broker ? brokerConfig.lastPingMs : 0,
-        lastSyncedAt: brokerName === brokerConfig.broker ? brokerConfig.lastSyncedAt : undefined,
-        walletBalance: brokerName === brokerConfig.broker ? (brokerConfig.walletBalance ?? 0) : 0,
+        status: brokerName === cfg.broker ? cfg.status : 'CONFIGURED',
+        lastPingMs: brokerName === cfg.broker ? cfg.lastPingMs : 0,
+        lastSyncedAt: brokerName === cfg.broker ? cfg.lastSyncedAt : undefined,
+        walletBalance: brokerName === cfg.broker ? (cfg.walletBalance ?? 0) : 0,
       });
     }
   }
@@ -727,8 +810,9 @@ function computeMetrics() {
 
 // REST API Endpoints
 app.get('/api/state', (req: Request, res: Response) => {
+  const userId = getRequestUserId(req);
+  const userBrokerConfig = getUserBrokerConfig(userId);
   const metrics = computeMetrics();
-  brokerConfig.connectedAccounts = getConnectedAccountsList();
   res.json({
     isKillSwitchActive,
     tradingMode,
@@ -736,7 +820,7 @@ app.get('/api/state', (req: Request, res: Response) => {
     virtualBalance,
     realBalance,
     riskSettings,
-    brokerConfig,
+    brokerConfig: userBrokerConfig,
 
     metrics,
     openPositions,
@@ -1268,38 +1352,40 @@ app.post('/api/engine/resume', (req: Request, res: Response) => {
 
 // Switch Trading Mode (Demo vs Real)
 app.post('/api/engine/mode', async (req: Request, res: Response) => {
+  const userId = getRequestUserId(req);
+  const userCreds = getUserExchangeCredentials(userId);
+  const userBrokerConfig = getUserBrokerConfig(userId);
   const { mode } = req.body;
   if (mode === 'DEMO' || mode === 'REAL') {
     tradingMode = mode;
     // When switching to REAL mode, automatically verify and refresh balance from the connected exchange
-    if (mode === 'REAL' && exchangeCredentials.apiKey && exchangeCredentials.apiSecret) {
+    if (mode === 'REAL' && userCreds.apiKey && userCreds.apiSecret) {
       try {
-        const syncRes = await verifyAndFetchBalance(exchangeCredentials);
-        brokerConfig.status = syncRes.status;
-        brokerConfig.lastPingMs = syncRes.latencyMs;
-        brokerConfig.lastSyncedAt = syncRes.lastSyncedAt;
-        brokerConfig.errorMessage = syncRes.errorMessage;
+        const syncRes = await verifyAndFetchBalance(userCreds);
+        userBrokerConfig.status = syncRes.status;
+        userBrokerConfig.lastPingMs = syncRes.latencyMs;
+        userBrokerConfig.lastSyncedAt = syncRes.lastSyncedAt;
+        userBrokerConfig.errorMessage = syncRes.errorMessage;
         if (syncRes.success) {
-          brokerConfig.assetBreakdown = syncRes.assets;
-          brokerConfig.walletBalance = syncRes.totalBalanceUsd;
+          userBrokerConfig.assetBreakdown = syncRes.assets;
+          userBrokerConfig.walletBalance = syncRes.totalBalanceUsd;
           if (syncRes.totalBalanceUsd > 0) {
             realBalance = syncRes.totalBalanceUsd;
-            brokerConfig.useAllocatedCapital = false;
+            userBrokerConfig.useAllocatedCapital = false;
           } else {
             // Actual exchange wallet has $0.00
-            brokerConfig.useAllocatedCapital = true;
+            userBrokerConfig.useAllocatedCapital = true;
             if (!realBalance || realBalance <= 0) {
               realBalance = 25000;
             }
           }
         }
+        saveUserBrokerConfig(userId, userBrokerConfig);
       } catch (err) {
         console.warn('Auto balance sync failed on mode switch:', err);
       }
     }
-    brokerConfig.connectedAccounts = getConnectedAccountsList();
-    persistAppState();
-    res.json({ success: true, tradingMode, realBalance, brokerConfig });
+    res.json({ success: true, tradingMode, realBalance, brokerConfig: getUserBrokerConfig(userId) });
   } else {
     res.status(400).json({ error: 'Invalid mode' });
   }
@@ -1660,88 +1746,92 @@ setInterval(async () => {
 
 // Update Broker & Crypto Exchange Settings
 app.post('/api/settings/broker', async (req: Request, res: Response) => {
+  const userId = getRequestUserId(req);
   const { broker, apiKey, apiSecret, passphrase, isSandbox, accountType, customEndpoint } = req.body;
 
+  const userCreds = getUserExchangeCredentials(userId);
+  const userBrokerConfig = getUserBrokerConfig(userId);
+  const userAccounts = getUserExchangeAccounts(userId);
+
   if (broker) {
-    brokerConfig.broker = broker;
-    exchangeCredentials.broker = broker;
+    userBrokerConfig.broker = broker;
+    userCreds.broker = broker;
   }
   if (typeof isSandbox === 'boolean') {
-    brokerConfig.isSandbox = isSandbox;
-    exchangeCredentials.isSandbox = isSandbox;
+    userBrokerConfig.isSandbox = isSandbox;
+    userCreds.isSandbox = isSandbox;
   }
   if (accountType) {
-    brokerConfig.accountType = accountType;
-    exchangeCredentials.accountType = accountType;
+    userBrokerConfig.accountType = accountType;
+    userCreds.accountType = accountType;
   }
   if (customEndpoint !== undefined) {
-    brokerConfig.customEndpoint = customEndpoint;
-    exchangeCredentials.customEndpoint = customEndpoint;
+    userBrokerConfig.customEndpoint = customEndpoint;
+    userCreds.customEndpoint = customEndpoint;
   }
 
   // Update credentials if provided
   if (apiKey) {
-    exchangeCredentials.apiKey = apiKey.trim();
-    brokerConfig.apiKeyMasked = apiKey.trim().length > 8
+    userCreds.apiKey = apiKey.trim();
+    userBrokerConfig.apiKeyMasked = apiKey.trim().length > 8
       ? apiKey.trim().slice(0, 4) + '••••••••••••' + apiKey.trim().slice(-4)
       : '••••••••';
   }
   if (apiSecret) {
-    exchangeCredentials.apiSecret = apiSecret.trim();
-    brokerConfig.apiSecretMasked = 'SK••••••••••••••••••••••••' + (apiSecret.trim().length > 4 ? apiSecret.trim().slice(-4) : '');
+    userCreds.apiSecret = apiSecret.trim();
+    userBrokerConfig.apiSecretMasked = 'SK••••••••••••••••••••••••' + (apiSecret.trim().length > 4 ? apiSecret.trim().slice(-4) : '');
   }
   if (passphrase !== undefined) {
-    exchangeCredentials.passphrase = passphrase.trim();
-    brokerConfig.passphraseMasked = passphrase.trim() ? '••••••••' : undefined;
+    userCreds.passphrase = passphrase.trim();
+    userBrokerConfig.passphraseMasked = passphrase.trim() ? '••••••••' : undefined;
   }
 
   // Save to active credentials and registry
-  saveToFile('exchange_credentials.json', exchangeCredentials);
-  if (exchangeCredentials.broker && exchangeCredentials.apiKey) {
-    allExchangeAccounts[exchangeCredentials.broker] = { ...exchangeCredentials };
-    saveToFile('exchange_accounts.json', allExchangeAccounts);
+  saveUserExchangeCredentials(userId, userCreds);
+  if (userCreds.broker && userCreds.apiKey) {
+    userAccounts[userCreds.broker] = { ...userCreds };
+    saveUserExchangeAccounts(userId, userAccounts);
   }
 
   // If credentials are configured, immediately test connection and fetch real balance!
-  if (exchangeCredentials.apiKey && exchangeCredentials.apiSecret) {
-    brokerConfig.status = 'CONNECTING';
-    const syncRes = await verifyAndFetchBalance(exchangeCredentials);
-    brokerConfig.status = syncRes.status;
-    brokerConfig.lastPingMs = syncRes.latencyMs;
-    brokerConfig.lastSyncedAt = syncRes.lastSyncedAt;
-    brokerConfig.errorMessage = syncRes.errorMessage;
+  if (userCreds.apiKey && userCreds.apiSecret) {
+    userBrokerConfig.status = 'CONNECTING';
+    const syncRes = await verifyAndFetchBalance(userCreds);
+    userBrokerConfig.status = syncRes.status;
+    userBrokerConfig.lastPingMs = syncRes.latencyMs;
+    userBrokerConfig.lastSyncedAt = syncRes.lastSyncedAt;
+    userBrokerConfig.errorMessage = syncRes.errorMessage;
 
     if (syncRes.success) {
-      brokerConfig.assetBreakdown = syncRes.assets;
-      brokerConfig.walletBalance = syncRes.totalBalanceUsd;
+      userBrokerConfig.assetBreakdown = syncRes.assets;
+      userBrokerConfig.walletBalance = syncRes.totalBalanceUsd;
       if (syncRes.totalBalanceUsd > 0) {
         realBalance = syncRes.totalBalanceUsd;
-        brokerConfig.useAllocatedCapital = false;
+        userBrokerConfig.useAllocatedCapital = false;
       } else {
         // Exchange wallet balance is 0
-        brokerConfig.useAllocatedCapital = true;
+        userBrokerConfig.useAllocatedCapital = true;
         if (!realBalance || realBalance <= 0) {
           realBalance = 25000;
         }
       }
     }
   } else {
-    brokerConfig.status = 'DISCONNECTED';
-    brokerConfig.errorMessage = undefined;
+    userBrokerConfig.status = 'DISCONNECTED';
+    userBrokerConfig.errorMessage = undefined;
   }
 
-  brokerConfig.connectedAccounts = getConnectedAccountsList();
-  persistAppState();
+  saveUserBrokerConfig(userId, userBrokerConfig);
 
-  const statusMsg = brokerConfig.status === 'CONNECTED'
-    ? (brokerConfig.walletBalance && brokerConfig.walletBalance > 0
-        ? `Connected to ${brokerConfig.broker}! Live Balance: $${brokerConfig.walletBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        : `Connected to ${brokerConfig.broker} (Wallet Balance: $0.00). Working Capital set to $${realBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
-    : (brokerConfig.errorMessage || 'Broker settings saved.');
+  const statusMsg = userBrokerConfig.status === 'CONNECTED'
+    ? (userBrokerConfig.walletBalance && userBrokerConfig.walletBalance > 0
+        ? `Connected to ${userBrokerConfig.broker}! Live Balance: $${userBrokerConfig.walletBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : `Connected to ${userBrokerConfig.broker} (Wallet Balance: $0.00). Working Capital set to $${realBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+    : (userBrokerConfig.errorMessage || 'Broker settings saved.');
 
   res.json({
     success: true,
-    brokerConfig,
+    brokerConfig: getUserBrokerConfig(userId),
     realBalance,
     message: statusMsg,
   });
@@ -1749,95 +1839,102 @@ app.post('/api/settings/broker', async (req: Request, res: Response) => {
 
 // Explicit Sync Live Balance Endpoint
 app.post('/api/broker/sync-balance', async (req: Request, res: Response) => {
-  if (!exchangeCredentials.apiKey || !exchangeCredentials.apiSecret) {
+  const userId = getRequestUserId(req);
+  const userCreds = getUserExchangeCredentials(userId);
+  const userBrokerConfig = getUserBrokerConfig(userId);
+
+  if (!userCreds.apiKey || !userCreds.apiSecret) {
     return res.status(400).json({
       success: false,
-      error: `No API credentials configured for ${brokerConfig.broker || 'exchange'}. Enter your API Key and Secret in Broker & Risk Engine settings.`,
+      error: `No API credentials configured for ${userBrokerConfig.broker || 'exchange'}. Enter your API Key and Secret in Broker & Risk Engine settings.`,
     });
   }
 
-  const syncRes = await verifyAndFetchBalance(exchangeCredentials);
-  brokerConfig.status = syncRes.status;
-  brokerConfig.lastPingMs = syncRes.latencyMs;
-  brokerConfig.lastSyncedAt = syncRes.lastSyncedAt;
-  brokerConfig.errorMessage = syncRes.errorMessage;
+  const syncRes = await verifyAndFetchBalance(userCreds);
+  userBrokerConfig.status = syncRes.status;
+  userBrokerConfig.lastPingMs = syncRes.latencyMs;
+  userBrokerConfig.lastSyncedAt = syncRes.lastSyncedAt;
+  userBrokerConfig.errorMessage = syncRes.errorMessage;
 
   if (syncRes.success) {
-    brokerConfig.assetBreakdown = syncRes.assets;
-    brokerConfig.walletBalance = syncRes.totalBalanceUsd;
+    userBrokerConfig.assetBreakdown = syncRes.assets;
+    userBrokerConfig.walletBalance = syncRes.totalBalanceUsd;
     if (syncRes.totalBalanceUsd > 0) {
       realBalance = syncRes.totalBalanceUsd;
-      brokerConfig.useAllocatedCapital = false;
+      userBrokerConfig.useAllocatedCapital = false;
     } else {
-      brokerConfig.useAllocatedCapital = true;
+      userBrokerConfig.useAllocatedCapital = true;
       if (!realBalance || realBalance <= 0) {
         realBalance = 25000;
       }
     }
-    brokerConfig.connectedAccounts = getConnectedAccountsList();
-    persistAppState();
+    saveUserBrokerConfig(userId, userBrokerConfig);
     return res.json({
       success: true,
       realBalance,
-      brokerConfig,
+      brokerConfig: getUserBrokerConfig(userId),
       message: syncRes.totalBalanceUsd > 0
-        ? `Balance synced from ${brokerConfig.broker}: $${realBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        : `Synced ${brokerConfig.broker}: Wallet balance is $0.00. Using $${realBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} working capital.`,
+        ? `Balance synced from ${userBrokerConfig.broker}: $${realBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : `Synced ${userBrokerConfig.broker}: Wallet balance is $0.00. Using $${realBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} working capital.`,
     });
   } else {
-    brokerConfig.connectedAccounts = getConnectedAccountsList();
-    persistAppState();
+    saveUserBrokerConfig(userId, userBrokerConfig);
     return res.status(400).json({
       success: false,
-      error: syncRes.errorMessage || `Failed to sync balance with ${brokerConfig.broker}`,
-      brokerConfig,
+      error: syncRes.errorMessage || `Failed to sync balance with ${userBrokerConfig.broker}`,
+      brokerConfig: getUserBrokerConfig(userId),
     });
   }
 });
 
 // Switch Active Connected Exchange / Broker
 app.post('/api/broker/switch-active', async (req: Request, res: Response) => {
+  const userId = getRequestUserId(req);
   const { broker } = req.body;
   if (!broker) return res.status(400).json({ error: 'Broker name required' });
 
-  const account = allExchangeAccounts[broker];
+  const userAccounts = getUserExchangeAccounts(userId);
+  const userBrokerConfig = getUserBrokerConfig(userId);
+  let userCreds = getUserExchangeCredentials(userId);
+
+  const account = userAccounts[broker];
   if (account && account.apiKey) {
-    exchangeCredentials = { ...account };
-    brokerConfig.broker = broker;
-    brokerConfig.isSandbox = account.isSandbox;
-    brokerConfig.accountType = account.accountType;
-    brokerConfig.apiKeyMasked = account.apiKey.length > 8
+    userCreds = { ...account };
+    userBrokerConfig.broker = broker;
+    userBrokerConfig.isSandbox = account.isSandbox;
+    userBrokerConfig.accountType = account.accountType;
+    userBrokerConfig.apiKeyMasked = account.apiKey.length > 8
       ? account.apiKey.slice(0, 4) + '••••••••••••' + account.apiKey.slice(-4)
       : '••••••••';
-    brokerConfig.apiSecretMasked = 'SK••••••••••••••••••••••••' + (account.apiSecret.length > 4 ? account.apiSecret.slice(-4) : '');
-    brokerConfig.passphraseMasked = account.passphrase ? '••••••••' : undefined;
+    userBrokerConfig.apiSecretMasked = 'SK••••••••••••••••••••••••' + (account.apiSecret.length > 4 ? account.apiSecret.slice(-4) : '');
+    userBrokerConfig.passphraseMasked = account.passphrase ? '••••••••' : undefined;
 
-    const syncRes = await verifyAndFetchBalance(exchangeCredentials);
-    brokerConfig.status = syncRes.status;
-    brokerConfig.lastPingMs = syncRes.latencyMs;
-    brokerConfig.lastSyncedAt = syncRes.lastSyncedAt;
-    brokerConfig.errorMessage = syncRes.errorMessage;
+    const syncRes = await verifyAndFetchBalance(userCreds);
+    userBrokerConfig.status = syncRes.status;
+    userBrokerConfig.lastPingMs = syncRes.latencyMs;
+    userBrokerConfig.lastSyncedAt = syncRes.lastSyncedAt;
+    userBrokerConfig.errorMessage = syncRes.errorMessage;
 
     if (syncRes.success) {
-      brokerConfig.assetBreakdown = syncRes.assets;
-      brokerConfig.walletBalance = syncRes.totalBalanceUsd;
+      userBrokerConfig.assetBreakdown = syncRes.assets;
+      userBrokerConfig.walletBalance = syncRes.totalBalanceUsd;
       if (syncRes.totalBalanceUsd > 0) {
         realBalance = syncRes.totalBalanceUsd;
-        brokerConfig.useAllocatedCapital = false;
+        userBrokerConfig.useAllocatedCapital = false;
       } else {
-        brokerConfig.useAllocatedCapital = true;
+        userBrokerConfig.useAllocatedCapital = true;
         if (!realBalance || realBalance <= 0) realBalance = 25000;
       }
     }
   } else {
-    brokerConfig.broker = broker;
-    brokerConfig.apiKeyMasked = '';
-    brokerConfig.apiSecretMasked = '';
-    brokerConfig.status = 'DISCONNECTED';
-    brokerConfig.errorMessage = undefined;
-    brokerConfig.assetBreakdown = [];
-    brokerConfig.walletBalance = 0;
-    exchangeCredentials = {
+    userBrokerConfig.broker = broker;
+    userBrokerConfig.apiKeyMasked = '';
+    userBrokerConfig.apiSecretMasked = '';
+    userBrokerConfig.status = 'DISCONNECTED';
+    userBrokerConfig.errorMessage = undefined;
+    userBrokerConfig.assetBreakdown = [];
+    userBrokerConfig.walletBalance = 0;
+    userCreds = {
       broker,
       apiKey: '',
       apiSecret: '',
@@ -1846,13 +1943,12 @@ app.post('/api/broker/switch-active', async (req: Request, res: Response) => {
     };
   }
 
-  saveToFile('exchange_credentials.json', exchangeCredentials);
-  brokerConfig.connectedAccounts = getConnectedAccountsList();
-  persistAppState();
+  saveUserExchangeCredentials(userId, userCreds);
+  saveUserBrokerConfig(userId, userBrokerConfig);
 
   res.json({
     success: true,
-    brokerConfig,
+    brokerConfig: getUserBrokerConfig(userId),
     realBalance,
     message: `Active exchange switched to ${broker}`,
   });
@@ -1860,18 +1956,19 @@ app.post('/api/broker/switch-active', async (req: Request, res: Response) => {
 
 // Toggle Allocated Working Capital vs Raw Wallet Balance
 app.post('/api/broker/allocated-capital', (req: Request, res: Response) => {
+  const userId = getRequestUserId(req);
+  const userBrokerConfig = getUserBrokerConfig(userId);
   const { useAllocated, allocatedAmount } = req.body;
   if (typeof useAllocated === 'boolean') {
-    brokerConfig.useAllocatedCapital = useAllocated;
+    userBrokerConfig.useAllocatedCapital = useAllocated;
   }
   if (typeof allocatedAmount === 'number' && allocatedAmount >= 0) {
     realBalance = allocatedAmount;
-  } else if (!useAllocated && typeof brokerConfig.walletBalance === 'number') {
-    realBalance = brokerConfig.walletBalance;
+  } else if (!useAllocated && typeof userBrokerConfig.walletBalance === 'number') {
+    realBalance = userBrokerConfig.walletBalance;
   }
-  brokerConfig.connectedAccounts = getConnectedAccountsList();
-  persistAppState();
-  res.json({ success: true, realBalance, brokerConfig });
+  saveUserBrokerConfig(userId, userBrokerConfig);
+  res.json({ success: true, realBalance, brokerConfig: getUserBrokerConfig(userId) });
 });
 
 

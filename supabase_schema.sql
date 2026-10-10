@@ -105,3 +105,34 @@ CREATE POLICY "Allow individual insert on trades" ON public.trades
 CREATE INDEX IF NOT EXISTS idx_strategies_user_id ON public.strategies(user_id);
 CREATE INDEX IF NOT EXISTS idx_positions_user_id ON public.positions(user_id);
 CREATE INDEX IF NOT EXISTS idx_trades_user_id ON public.trades(user_id);
+
+-- 7. Multi-Tenant Per-User Broker Configs Table (Private to each user)
+CREATE TABLE IF NOT EXISTS public.user_broker_configs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE UNIQUE,
+    broker TEXT NOT NULL DEFAULT 'Binance',
+    account_type TEXT NOT NULL DEFAULT 'SPOT',
+    is_sandbox BOOLEAN NOT NULL DEFAULT false,
+    api_key_masked TEXT DEFAULT '',
+    api_secret_masked TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'DISCONNECTED',
+    wallet_balance NUMERIC DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()),
+    updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now())
+);
+
+ALTER TABLE public.user_broker_configs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow individual select on user_broker_configs" ON public.user_broker_configs
+    FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Allow individual insert on user_broker_configs" ON public.user_broker_configs
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Allow individual update on user_broker_configs" ON public.user_broker_configs
+    FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Allow individual delete on user_broker_configs" ON public.user_broker_configs
+    FOR DELETE USING (auth.uid() = user_id);
+
+CREATE INDEX IF NOT EXISTS idx_user_broker_configs_user_id ON public.user_broker_configs(user_id);

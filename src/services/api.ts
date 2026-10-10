@@ -7,6 +7,9 @@ async function authFetch(url: string, options: RequestInit = {}) {
   if (session?.access_token) {
     headers.set('Authorization', `Bearer ${session.access_token}`);
   }
+  if (session?.user?.id) {
+    headers.set('x-user-id', session.user.id);
+  }
   return fetch(url, { ...options, headers });
 }
 
