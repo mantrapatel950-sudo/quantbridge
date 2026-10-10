@@ -2561,15 +2561,31 @@ async function checkAndSyncGit() {
     gitSyncState.hasRemoteUpdate = isBehind;
 
     // Automatically pull if another device/user pushed to GitHub
-    if (isBehind && !hasLocalChanges && gitSyncState.autoSyncEnabled) {
+    if (isBehind && gitSyncState.autoSyncEnabled && process.env.AUTO_PUSH !== 'true') {
       gitSyncState.isPulling = true;
       console.log(`🚀 [Auto-Updater] New GitHub commit detected (${gitSyncState.remoteCommit}). Auto-pulling...`);
-      const { stdout: pullOut } = await execAsync(`git pull origin ${branch}`);
-      gitSyncState.lastSyncedAt = new Date().toISOString();
-      gitSyncState.statusMessage = `Updated to ${gitSyncState.remoteCommit}`;
-      gitSyncState.currentCommit = gitSyncState.remoteCommit;
-      gitSyncState.hasRemoteUpdate = false;
-      console.log(`✅ [Auto-Updater] Successfully updated: ${pullOut.trim()}`);
+      try {
+        const { stdout: pullOut } = await execAsync(`git pull origin ${branch}`);
+        gitSyncState.lastSyncedAt = new Date().toISOString();
+        gitSyncState.statusMessage = 'RELOAD_REQUIRED';
+        gitSyncState.currentCommit = gitSyncState.remoteCommit;
+        gitSyncState.hasRemoteUpdate = false;
+        console.log(`✅ [Auto-Updater] Successfully updated: ${pullOut.trim()}`);
+      } catch {
+        // If git pull had conflict with untracked/local file on consumer machine, stash and force-pull
+        console.warn(`⚠️ [Auto-Updater] Git pull encountered conflict. Stashing and pulling clean...`);
+        try {
+          await execAsync('git stash');
+          await execAsync(`git pull origin ${branch}`);
+          gitSyncState.lastSyncedAt = new Date().toISOString();
+          gitSyncState.statusMessage = 'RELOAD_REQUIRED';
+          gitSyncState.currentCommit = gitSyncState.remoteCommit;
+          gitSyncState.hasRemoteUpdate = false;
+          console.log(`✅ [Auto-Updater] Clean pull successful!`);
+        } catch (stashErr: any) {
+          console.error(`❌ [Auto-Updater] Fallback pull failed:`, stashErr.message);
+        }
+      }
     } else if (hasLocalChanges && gitSyncState.autoSyncEnabled && process.env.AUTO_PUSH === 'true') {
       gitSyncState.isPushing = true;
       console.log(`🔄 [Auto-Sync] Local modifications detected. Auto-pushing to GitHub...`);
@@ -2591,9 +2607,9 @@ async function checkAndSyncGit() {
   }
 }
 
-// Check every 25 seconds in background
-setInterval(checkAndSyncGit, 25000);
-setTimeout(checkAndSyncGit, 3000);
+// Check every 10 seconds in background
+setInterval(checkAndSyncGit, 10000);
+setTimeout(checkAndSyncGit, 2000);
 
 // API Endpoints for Git Auto-Sync
 app.get('/api/system/git-status', (req: Request, res: Response) => {

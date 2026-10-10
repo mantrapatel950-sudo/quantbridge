@@ -4,10 +4,11 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node ./node_modules/tsx/dist/cli.mjs server.ts",
+    "dev": "node ./node_modules/tsx/dist/cli.mjs watch server.ts",
     "build": "vite build",
     "preview": "vite preview",
     "start": "node ./node_modules/tsx/dist/cli.mjs server.ts",
+    "update": "git fetch origin && git reset --hard origin/main && npm install && npm run dev",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "git:push": "powershell -ExecutionPolicy Bypass -File ./scripts/auto-sync.ps1",

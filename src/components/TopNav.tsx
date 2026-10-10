@@ -65,19 +65,25 @@ export const TopNav: React.FC<Props> = ({
     return () => clearInterval(interval);
   }, []);
 
-  // Poll GitHub auto-sync status every 20s
+  // Poll GitHub auto-sync status every 10s and auto-reload on update
   useEffect(() => {
+    let prevCommit = '';
     const checkGit = async () => {
       try {
         const res = await fetch('/api/system/git-status');
         if (res.ok) {
           const data = await res.json();
           setGitStatus(data);
+          if (data.statusMessage === 'RELOAD_REQUIRED' || (prevCommit && data.currentCommit && prevCommit !== data.currentCommit)) {
+            console.log('⚡ QuantBridge updated to latest version! Auto-reloading UI...');
+            setTimeout(() => window.location.reload(), 1500);
+          }
+          if (data.currentCommit) prevCommit = data.currentCommit;
         }
       } catch {}
     };
     checkGit();
-    const timer = setInterval(checkGit, 20000);
+    const timer = setInterval(checkGit, 10000);
     return () => clearInterval(timer);
   }, []);
 
