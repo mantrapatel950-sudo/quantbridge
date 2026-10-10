@@ -131,6 +131,18 @@ export async function verifyAndFetchBalance(credentials: ExchangeCredentials): P
         result = await fetchKrakenBalance(apiKey, apiSecret, customEndpoint);
         break;
 
+      case 'DELTA':
+      case 'DELTA EXCHANGE':
+      case 'DELTAEXCHANGE':
+        result = await fetchDeltaBalance(apiKey, apiSecret, isSandbox, customEndpoint);
+        break;
+
+      case 'SHARK':
+      case 'SHARKEXCHANGE':
+      case 'SHARK EXCHANGE':
+        result = await fetchSharkExchangeBalance(apiKey, apiSecret, customEndpoint);
+        break;
+
       default:
         // Generic / Other Broker validation
         result = await fetchGenericBrokerFallback(broker, isSandbox);
@@ -715,6 +727,181 @@ async function fetchKrakenBalance(
 
   assets.sort((a, b) => b.usdValue - a.usdValue);
   return { totalUsd, assets };
+}
+
+// ----------------------------------------------------------------------
+// DELTA EXCHANGE CONNECTOR (Global & Delta India)
+// ----------------------------------------------------------------------
+async function fetchDeltaBalance(
+  apiKey: string,
+  apiSecret: string,
+  isSandbox: boolean,
+  customEndpoint?: string
+): Promise<{ totalUsd: number; assets: ExchangeAssetBalance[] }> {
+  // Endpoints: https://api.delta.exchange (Global), https://api.india.delta.exchange (India), https://testnet-api.delta.exchange (Testnet)
+  let baseUrls = [
+    customEndpoint || (isSandbox ? 'https://testnet-api.delta.exchange' : 'https://api.delta.exchange'),
+    'https://api.india.delta.exchange',
+  ];
+  if (customEndpoint) baseUrls = [customEndpoint];
+
+  let lastError: any = null;
+  const prices = await fetchLiveCryptoPrices();
+
+  for (const baseUrl of baseUrls) {
+    try {
+      const method = 'GET';
+      const path = '/v2/wallet/balances';
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      const message = `${method}${timestamp}${path}`;
+      const signature = crypto.createHmac('sha256', apiSecret).update(message).digest('hex');
+
+      const res = await fetchWithTimeout(`${baseUrl}${path}`, {
+        method,
+        headers: {
+          'Accept': 'application/json',
+          'api-key': apiKey,
+          'signature': signature,
+          'timestamp': timestamp,
+        },
+      }, 5000);
+
+      const data = await res.json();
+      if (!res.ok || data.success === false) {
+        const errMsg = data.error?.message || data.message || `Delta HTTP ${res.status}`;
+        lastError = new Error(`Delta Exchange: ${errMsg}`);
+        continue;
+      }
+
+      const rawList = Array.isArray(data.result) ? data.result : (Array.isArray(data) ? data : []);
+      const assets: ExchangeAssetBalance[] = [];
+      let totalUsd = 0;
+
+      for (const item of rawList) {
+        const assetName = (item.asset_symbol || item.symbol || item.asset || 'USDT').toUpperCase();
+        const free = parseFloat(item.available_balance || item.balance || '0');
+        const total = parseFloat(item.balance || item.available_balance || '0');
+        const locked = Math.max(0, total - free);
+
+        if (total > 0.0001) {
+          const price = STABLECOINS.has(assetName) ? 1.0 : (prices[assetName] || 0);
+          const usdVal = total * price;
+          if (usdVal >= 0.1 || total > 0.01) {
+            assets.push({
+              asset: assetName,
+              free,
+              locked,
+              total,
+              usdValue: Number(usdVal.toFixed(2)),
+            });
+            totalUsd += usdVal;
+          }
+        }
+      }
+
+      assets.sort((a, b) => b.usdValue - a.usdValue);
+      return { totalUsd, assets };
+    } catch (err: any) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error('Delta Exchange: Unable to connect or authenticate API keys.');
+}
+
+// ----------------------------------------------------------------------
+// SHARK EXCHANGE CONNECTOR (Futures & INR/USDT Margined)
+// ----------------------------------------------------------------------
+async function fetchSharkExchangeBalance(
+  apiKey: string,
+  apiSecret: string,
+  customEndpoint?: string
+): Promise<{ totalUsd: number; assets: ExchangeAssetBalance[] }> {
+  const baseUrl = customEndpoint || 'https://api.sharkexchange.in';
+  const timestamp = Date.now().toString();
+  const queryString = `timestamp=${timestamp}`;
+  const signature = crypto.createHmac('sha256', apiSecret).update(queryString).digest('hex');
+
+  const candidateEndpoints = [
+    `/v1/wallet/balance?${queryString}&signature=${signature}`,
+    `/api/v1/wallet/balance?${queryString}&signature=${signature}`,
+    `/fapi/v2/balance?${queryString}&signature=${signature}`,
+  ];
+
+  let lastError: any = null;
+  const prices = await fetchLiveCryptoPrices();
+
+  for (const path of candidateEndpoints) {
+    try {
+      const res = await fetchWithTimeout(`${baseUrl}${path}`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'X-MBX-APIKEY': apiKey,
+          'api-key': apiKey,
+          'X-API-KEY': apiKey,
+        },
+      }, 5000);
+
+      const data = await res.json();
+      if (!res.ok || data.code < 0 || data.error) {
+        lastError = new Error(`SharkExchange: ${data.msg || data.message || data.error || `HTTP ${res.status}`}`);
+        continue;
+      }
+
+      const assets: ExchangeAssetBalance[] = [];
+      let totalUsd = 0;
+
+      // Format 1: Array of balances
+      if (Array.isArray(data)) {
+        for (const item of data) {
+          const assetName = (item.asset || item.currency || 'USDT').toUpperCase();
+          const balance = parseFloat(item.walletBalance || item.balance || '0');
+          const available = parseFloat(item.availableBalance || item.withdrawableBalance || item.walletBalance || '0');
+          if (balance > 0.0001) {
+            let usdVal = balance;
+            if (assetName === 'INR') {
+              usdVal = balance / 86.5; // Approx INR to USD conversion
+            } else if (!STABLECOINS.has(assetName)) {
+              usdVal = balance * (prices[assetName] || 0);
+            }
+            assets.push({
+              asset: assetName,
+              free: available,
+              locked: Math.max(0, balance - available),
+              total: balance,
+              usdValue: Number(usdVal.toFixed(2)),
+            });
+            totalUsd += usdVal;
+          }
+        }
+      } else if (typeof data === 'object' && data !== null) {
+        // Format 2: Single object with walletBalance
+        const rawBal = parseFloat(data.walletBalance || data.balance || data.totalBalance || '0');
+        const rawAvail = parseFloat(data.withdrawableBalance || data.availableBalance || data.walletBalance || '0');
+        const isINR = (data.currency || 'USDT').toUpperCase() === 'INR';
+        const usdVal = isINR ? rawBal / 86.5 : rawBal;
+        if (rawBal > 0) {
+          assets.push({
+            asset: isINR ? 'INR' : 'USDT',
+            free: rawAvail,
+            locked: Math.max(0, rawBal - rawAvail),
+            total: rawBal,
+            usdValue: Number(usdVal.toFixed(2)),
+          });
+          totalUsd += usdVal;
+        }
+      }
+
+      assets.sort((a, b) => b.usdValue - a.usdValue);
+      return { totalUsd, assets };
+    } catch (err: any) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error('SharkExchange: Unable to authenticate or fetch account balance.');
 }
 
 // ----------------------------------------------------------------------

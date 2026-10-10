@@ -21,7 +21,9 @@ It connects external signal generators (such as **TradingView Pine Script alerts
 - **🔗 Multi-Exchange API Gateway**: Native connectors with HMAC signature encryption & time-drift compensation for:
   - **Binance** (Spot & USDT-M Futures)
   - **Bybit** (V5 Unified Trading & Derivatives)
-  - **OKX**, **Coinbase**, **KuCoin**, **Bitget**, **Kraken**, and **Alpaca Markets**
+  - **Delta Exchange** (Global & Delta India Perpetual Futures / Options)
+  - **Shark Exchange** (India FIU-registered USDT & INR Margined Derivatives)
+  - **OKX**, **Coinbase**, **KuCoin**, **Bitget**, **Kraken**, **Zerodha Kite**, and **Alpaca Markets**
 - **💰 Working Capital Allocation**: Presets ($1k, $5k, $10k, $25k, $50k) allowing strategies to execute even if live wallet balances are $0.00.
 - **🤖 24/7 Algo Lab**: Built-in autonomous bots (*Apex EMA Trend Hunter*, *RSI Mean Reversion*, *Bollinger Breakout*, *MACD Wave*).
 - **📉 Cumulative Equity Curve & Trade Anatomy**: Multi-mode visualization (Equity curve with high-watermark, Underwater drawdown %, Trade PnL bars) + interactive Trade Inspector with MFE, MAE, slippage, and fee telemetry.
