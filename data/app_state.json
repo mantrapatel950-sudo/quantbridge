@@ -1,0 +1,39 @@
+{
+  "isKillSwitchActive": false,
+  "tradingMode": "DEMO",
+  "virtualBalance": 1000,
+  "realBalance": 25000,
+  "riskSettings": {
+    "maxDailyLossPercent": 4,
+    "maxOpenPositions": 5,
+    "riskPerTradePercent": 1.5,
+    "consecutiveLossHalt": 3,
+    "slippageTolerancePercent": 0.1
+  },
+  "brokerConfig": {
+    "broker": "Binance",
+    "apiKeyMasked": "PrHv••••••••••••oUJ7",
+    "apiSecretMasked": "SK••••••••••••••••••••••••nQrH",
+    "isSandbox": false,
+    "status": "CONNECTED",
+    "lastPingMs": 789,
+    "encryptionStandard": "AES-256-GCM",
+    "accountType": "FUTURES",
+    "lastSyncedAt": "2026-10-10T16:05:21.803Z",
+    "assetBreakdown": [],
+    "connectedAccounts": [
+      {
+        "broker": "Binance",
+        "apiKeyMasked": "PrHv••••••••oUJ7",
+        "isSandbox": false,
+        "accountType": "FUTURES",
+        "status": "CONNECTED",
+        "lastPingMs": 789,
+        "lastSyncedAt": "2026-10-10T16:05:21.803Z",
+        "walletBalance": 0
+      }
+    ],
+    "walletBalance": 0,
+    "useAllocatedCapital": true
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "QuantBridge - Algo Execution Engine & TradingView Webhook Terminal",
+  "description": "Professional algorithmic trading execution terminal with TradingView webhook bridge, virtual paper trading, broker API routing, live performance analytics, and emergency risk controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

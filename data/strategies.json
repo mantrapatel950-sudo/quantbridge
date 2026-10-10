@@ -1,0 +1,217 @@
+[
+  {
+    "id": "strat-1791547702660",
+    "name": "sweep",
+    "description": "",
+    "symbol": "BTC/USDT",
+    "timeframe": "5m",
+    "direction": "BOTH",
+    "type": "PINE_SCRIPT",
+    "enabled": false,
+    "status": "PAUSED",
+    "parameters": {
+      "emaFastPeriod": 9,
+      "emaSlowPeriod": 21,
+      "trendEmaPeriod": 200,
+      "rsiPeriod": 14,
+      "rsiOversold": 30,
+      "rsiOverbought": 70,
+      "bbPeriod": 20,
+      "bbStdDev": 2,
+      "macdFast": 12,
+      "macdSlow": 26,
+      "macdSignal": 9,
+      "volumeConfirmation": false,
+      "pineScriptCode": "//@version=5\nindicator(\"Liquidity + FVG + Structure Signal (Any TF)\", overlay=true, max_lines_count=200, max_boxes_count=200, max_labels_count=200)\n\n// ============================= INPUTS =============================\n// Runs entirely off the chart's own timeframe — no weekly/HTF data pull needed.\n// Works on any TF you load it on (1m, 5m, 15m, 1H, 1D, 1W, whatever's on the chart).\n\ngrpSR = \"Support / Resistance\"\npivotLen    = input.int(10, \"Pivot Length (S/R + Liquidity swings)\", minval=2, group=grpSR)\nsrTolPct    = input.float(0.25, \"Zone Tolerance % (price counts as 'at zone')\", minval=0.01, step=0.05, group=grpSR)\nmaxZones    = input.int(6, \"Max S/R Zones Kept\", minval=2, maxval=20, group=grpSR)\n\ngrpLiq = \"Liquidity Setup\"\nliqTolPct   = input.float(0.15, \"Equal High/Low Tolerance %\", minval=0.01, step=0.05, group=grpLiq)\nliqLookback = input.int(50, \"Liquidity Pool Lookback (bars)\", minval=10, group=grpLiq)\nliqAvgLen   = input.int(20, \"Liquidity Avg Length\", minval=5, group=grpLiq)\n\ngrpFVG = \"Fair Value Gap\"\nfvgMinAtr   = input.float(0.15, \"Min FVG size (x ATR)\", minval=0.01, step=0.05, group=grpFVG)\nfvgAtrLen   = input.int(14, \"ATR Length\", minval=5, group=grpFVG)\nshowFVGBox  = input.bool(true, \"Draw FVG Boxes\", group=grpFVG)\n\ngrpSig = \"Signal\"\ngrpStruct = \"Market Structure (HH/HL/LH/LL)\"\nshowStructure = input.bool(true, \"Show HH / HL / LH / LL Labels\", group=grpStruct)\n\n// ============================= MAJOR SUPPORT / RESISTANCE =============================\nph = ta.pivothigh(high, pivotLen, pivotLen)\npl = ta.pivotlow(low, pivotLen, pivotLen)\n\nvar float[] resLevels = array.new_float(0)\nvar float[] supLevels = array.new_float(0)\n\nif not na(ph)\n    array.unshift(resLevels, ph)\n    if array.size(resLevels) > maxZones\n        array.pop(resLevels)\n\nif not na(pl)\n    array.unshift(supLevels, pl)\n    if array.size(supLevels) > maxZones\n        array.pop(supLevels)\n\n// draw current zone lines (remove old, redraw last known set)\nvar line[] resLines = array.new_line(0)\nvar line[] supLines = array.new_line(0)\n\nif barstate.islast\n    for l in resLines\n        line.delete(l)\n    array.clear(resLines)\n    for l in supLines\n        line.delete(l)\n    array.clear(supLines)\n    if array.size(resLevels) > 0\n        for i = 0 to array.size(resLevels) - 1\n            lvl = array.get(resLevels, i)\n            ln = line.new(bar_index - 200, lvl, bar_index + 20, lvl, color=color.new(color.red, 40), width=1, style=line.style_dashed)\n            array.push(resLines, ln)\n    if array.size(supLevels) > 0\n        for i = 0 to array.size(supLevels) - 1\n            lvl = array.get(supLevels, i)\n            ln = line.new(bar_index - 200, lvl, bar_index + 20, lvl, color=color.new(color.green, 40), width=1, style=line.style_dashed)\n            array.push(supLines, ln)\n\nf_nearestDist(arr, ref) =>\n    float best = na\n    if array.size(arr) > 0\n        for i = 0 to array.size(arr) - 1\n            v = array.get(arr, i)\n            d = math.abs(ref - v) / ref * 100\n            if na(best) or d < best\n                best := d\n    best\n\n// ============================= MARKET STRUCTURE: HH / HL / LH / LL =============================\nvar float prevPH = na\nvar float prevPL = na\nvar string lastStruct = \"\"   // most recent structure break: \"HH\",\"LH\",\"HL\",\"LL\"\n\nif not na(ph)\n    txt = na(prevPH) ? \"H\" : ph > prevPH ? \"HH\" : \"LH\"\n    if not na(prevPH)\n        lastStruct := txt\n        if showStructure\n            label.new(bar_index[pivotLen], ph, txt, style=label.style_label_down, color=color.new(color.silver, 0), textcolor=color.black, size=size.tiny)\n    prevPH := ph\n\nif not na(pl)\n    txt = na(prevPL) ? \"L\" : pl > prevPL ? \"HL\" : \"LL\"\n    if not na(prevPL)\n        lastStruct := txt\n        if showStructure\n            label.new(bar_index[pivotLen], pl, txt, style=label.style_label_up, color=color.new(color.silver, 0), textcolor=color.black, size=size.tiny)\n    prevPL := pl\n\nbullStructure = lastStruct == \"HH\" or lastStruct == \"HL\"\nbearStructure = lastStruct == \"LL\" or lastStruct == \"LH\"\n\nresDist = f_nearestDist(resLevels, close)\nsupDist = f_nearestDist(supLevels, close)\n\natResistance = not na(resDist) and resDist <= srTolPct\natSupport    = not na(supDist) and supDist <= srTolPct\n\nzoneText = atResistance ? \"At Resistance\" : atSupport ? \"At Support\" : \"Neutral\"\n\n// ============================= LIQUIDITY SETUP (replaces Volume) =============================\n// Pools = clusters of equal highs / equal lows within tolerance -> proxy for resting liquidity\nf_poolCount(isHigh) =>\n    int cnt = 0\n    ref = isHigh ? high[pivotLen] : low[pivotLen]\n    if not na(ref)\n        for i = 1 to liqLookback\n            v = isHigh ? high[i] : low[i]\n            if not na(v) and math.abs(v - ref) / ref * 100 <= liqTolPct\n                cnt += 1\n    cnt\n\nliqHighCount = f_poolCount(true)\nliqLowCount  = f_poolCount(false)\nliquidityScore = liqHighCount + liqLowCount\nliquidityAvg   = ta.sma(liquidityScore, liqAvgLen)\nliquidityRatio = liquidityAvg > 0 ? liquidityScore / liquidityAvg : 1.0\n\n// Buyside liquidity = cluster of equal highs just above price (stops above)\n// Sellside liquidity = cluster of equal lows just below price (stops below)\nbuysideLiquidity = liqHighCount >= 2\nsellsideLiquidity = liqLowCount >= 2\n\n// Liquidity sweep: wick pierces the pool level then candle closes back on the other side\nsweptSellside = sellsideLiquidity and low < low[pivotLen] and close > low[pivotLen]\nsweptBuyside  = buysideLiquidity and high > high[pivotLen] and close < high[pivotLen]\n\n// --- visual liquidity sweep markers (fire on every sweep, not just full 3/3 signal) ---\ngrpSwp = \"Liquidity Sweep Markers\"\nshowSweeps = input.bool(true, \"Show Liquidity Sweep Markers\", group=grpSwp)\n\nif showSweeps and sweptSellside\n    label.new(bar_index, low, \"SSL Swept\", style=label.style_label_up, color=color.new(color.lime, 20), textcolor=color.black, size=size.tiny, yloc=yloc.belowbar)\n\nif showSweeps and sweptBuyside\n    label.new(bar_index, high, \"BSL Swept\", style=label.style_label_down, color=color.new(color.red, 20), textcolor=color.white, size=size.tiny, yloc=yloc.abovebar)\n\nplotshape(showSweeps and sweptSellside, title=\"Sellside Liquidity Swept\", style=shape.circle, location=location.belowbar, color=color.lime, size=size.tiny)\nplotshape(showSweeps and sweptBuyside, title=\"Buyside Liquidity Swept\", style=shape.circle, location=location.abovebar, color=color.red, size=size.tiny)\n\nalertcondition(sweptSellside, title=\"Sellside Liquidity Swept\", message=\"Sellside liquidity (equal lows) swept — watch for bullish reversal\")\nalertcondition(sweptBuyside, title=\"Buyside Liquidity Swept\", message=\"Buyside liquidity (equal highs) swept — watch for bearish reversal\")\n\n// ============================= FAIR VALUE GAP (FVG) =============================\natrVal = ta.atr(fvgAtrLen)\n\nbullFVG = low[0] > high[2] and (low[0] - high[2]) >= fvgMinAtr * atrVal\nbearFVG = high[0] < low[2] and (low[2] - high[0]) >= fvgMinAtr * atrVal\n\nif showFVGBox and bullFVG\n    box.new(bar_index[2], high[2], bar_index, low[0], border_color=color.new(color.lime, 60), bgcolor=color.new(color.lime, 85))\n\nif showFVGBox and bearFVG\n    box.new(bar_index[2], low[2], bar_index, high[0], border_color=color.new(color.red, 60), bgcolor=color.new(color.red, 85))\n\n// \"recent unmitigated FVG\" flags (within last 15 bars, price hasn't fully closed through it)\nvar float lastBullFVGTop = na\nvar float lastBullFVGBot = na\nvar int   lastBullFVGBar = na\nif bullFVG\n    lastBullFVGTop := low[0]\n    lastBullFVGBot := high[2]\n    lastBullFVGBar := bar_index\n\nvar float lastBearFVGTop = na\nvar float lastBearFVGBot = na\nvar int   lastBearFVGBar = na\nif bearFVG\n    lastBearFVGTop := low[2]\n    lastBearFVGBot := high[0]\n    lastBearFVGBar := bar_index\n\nrecentBullFVG = not na(lastBullFVGBar) and (bar_index - lastBullFVGBar) <= 15 and close > lastBullFVGBot\nrecentBearFVG = not na(lastBearFVGBar) and (bar_index - lastBearFVGBar) <= 15 and close < lastBearFVGTop\n\n// ============================= CONFIRM COUNTERS (out of 3) =============================\nbullCond1 = atSupport\nbullCond2 = sweptSellside\nbullCond3 = recentBullFVG\nbullConfirm = (bullCond1 ? 1 : 0) + (bullCond2 ? 1 : 0) + (bullCond3 ? 1 : 0)\n\nbearCond1 = atResistance\nbearCond2 = sweptBuyside\nbearCond3 = recentBearFVG\nbearConfirm = (bearCond1 ? 1 : 0) + (bearCond2 ? 1 : 0) + (bearCond3 ? 1 : 0)\n\nbuySignal  = bullConfirm == 3\nsellSignal = bearConfirm == 3\n\nplotshape(buySignal, title=\"BUY\", style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small, text=\"BUY\")\nplotshape(sellSignal, title=\"SELL\", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text=\"SELL\")\n\nalertcondition(buySignal, title=\"Liquidity+FVG BUY\", message=\"BUY: support zone + sellside liquidity swept + bullish FVG\")\nalertcondition(sellSignal, title=\"Liquidity+FVG SELL\", message=\"SELL: resistance zone + buyside liquidity swept + bearish FVG\")\n\n// ============================= INFO TABLE =============================\nvar table t = table.new(position.top_right, 2, 5, border_width=1)\n\nif barstate.islast\n    table.cell(t, 0, 0, \"Liquidity / Avg\", bgcolor=color.gray, text_color=color.white)\n    table.cell(t, 1, 0, str.tostring(liquidityRatio, \"#.##\") + \"x\", bgcolor=color.gray, text_color=color.white)\n\n    table.cell(t, 0, 1, \"Zone\", bgcolor=color.gray, text_color=color.white)\n    table.cell(t, 1, 1, zoneText, bgcolor=atResistance ? color.red : atSupport ? color.green : color.new(color.gray, 30), text_color=color.white)\n\n    table.cell(t, 0, 2, \"Bull confirm\", bgcolor=color.gray, text_color=color.white)\n    table.cell(t, 1, 2, str.tostring(bullConfirm) + \"/3\", bgcolor=bullConfirm == 3 ? color.green : color.new(color.green, 70), text_color=color.white)\n\n    table.cell(t, 0, 3, \"Bear confirm\", bgcolor=color.gray, text_color=color.white)\n    table.cell(t, 1, 3, str.tostring(bearConfirm) + \"/3\", bgcolor=bearConfirm == 3 ? color.red : color.new(color.red, 70), text_color=color.white)\n\n    table.cell(t, 0, 4, \"Structure\", bgcolor=color.gray, text_color=color.white)\n    table.cell(t, 1, 4, (lastStruct == \"\" ? \"—\" : lastStruct) + \"  (\" + timeframe.period + \")\", bgcolor=bullStructure ? color.new(color.green, 20) : bearStructure ? color.new(color.red, 20) : color.new(color.gray, 30), text_color=color.white"
+    },
+    "risk": {
+      "allocationPercent": 6,
+      "leverage": 75,
+      "stopLossPercent": 1.5,
+      "takeProfitPercent": 3.5,
+      "isTrailingStop": true,
+      "trailingStopPercent": 1,
+      "cooldownMinutes": 5
+    },
+    "stats": {
+      "totalTrades": 4,
+      "winRate": 0,
+      "totalPnl": 0,
+      "lastSignalMessage": "BUY 0.1989 BTC/USDT @ $82,913.52 (AI Executed Pine Script: longCondition == true)",
+      "lastTriggeredAt": "2026-10-10T12:09:52.222Z"
+    },
+    "createdAt": "2026-10-09T12:08:22.660Z",
+    "updatedAt": "2026-10-10T14:10:24.365Z"
+  },
+  {
+    "id": "strat-1",
+    "name": "Apex EMA Trend Hunter",
+    "description": "Fast EMA crossover strategy filtered by 200 EMA macro trend and dynamic trailing stop loss.",
+    "symbol": "BTC/USDT",
+    "timeframe": "15m",
+    "direction": "BOTH",
+    "type": "EMA_CROSS",
+    "enabled": true,
+    "status": "COOLDOWN",
+    "parameters": {
+      "emaFastPeriod": 9,
+      "emaSlowPeriod": 21,
+      "trendEmaPeriod": 200,
+      "volumeConfirmation": true
+    },
+    "risk": {
+      "allocationPercent": 8,
+      "leverage": 10,
+      "stopLossPercent": 1.8,
+      "takeProfitPercent": 4.2,
+      "isTrailingStop": true,
+      "trailingStopPercent": 1.2,
+      "cooldownMinutes": 5
+    },
+    "stats": {
+      "totalTrades": 44,
+      "winRate": 69,
+      "totalPnl": 5420.5,
+      "lastTriggeredAt": "2026-10-10T14:12:19.380Z",
+      "lastSignalMessage": "SELL 0.0121 BTC/USDT @ $82,833.73 (EMA(9) $82774.48 crossed below EMA(21) $82775.79 · Bearish death cross)"
+    },
+    "createdAt": "2026-10-01T00:00:00Z",
+    "updatedAt": "2026-10-10T14:10:26.866Z"
+  },
+  {
+    "id": "strat-2",
+    "name": "RSI Mean Reversion Sniper",
+    "description": "Snipes deep oversold pullbacks and overbought tops with quick tight-bracket take-profits.",
+    "symbol": "ETH/USDT",
+    "timeframe": "5m",
+    "direction": "BOTH",
+    "type": "RSI_REVERSION",
+    "enabled": false,
+    "status": "PAUSED",
+    "parameters": {
+      "rsiPeriod": 14,
+      "rsiOversold": 28,
+      "rsiOverbought": 72
+    },
+    "risk": {
+      "allocationPercent": 6,
+      "leverage": 15,
+      "stopLossPercent": 1.2,
+      "takeProfitPercent": 2.8,
+      "isTrailingStop": true,
+      "trailingStopPercent": 0.8,
+      "cooldownMinutes": 4
+    },
+    "stats": {
+      "totalTrades": 59,
+      "winRate": 74.1,
+      "totalPnl": 3890.2,
+      "lastTriggeredAt": "2026-10-09T12:09:52.663Z",
+      "lastSignalMessage": "BUY 36.5157 ETH/USDT @ $2,509.06 (RSI(14) oversold at 23.5 (<= 28) · Bullish reversal)"
+    },
+    "createdAt": "2026-10-01T00:00:00Z",
+    "updatedAt": "2026-10-09T12:11:19.435Z"
+  },
+  {
+    "id": "strat-3",
+    "name": "Bollinger Squeeze Volatility Breakout",
+    "description": "Captures explosive volatility expansion after narrow Bollinger Band contractions with volume spikes.",
+    "symbol": "SOL/USDT",
+    "timeframe": "15m",
+    "direction": "LONG_ONLY",
+    "type": "BOLLINGER_BREAKOUT",
+    "enabled": false,
+    "status": "PAUSED",
+    "parameters": {
+      "bbPeriod": 20,
+      "bbStdDev": 2.2,
+      "volumeConfirmation": true
+    },
+    "risk": {
+      "allocationPercent": 5,
+      "leverage": 8,
+      "stopLossPercent": 2,
+      "takeProfitPercent": 5,
+      "isTrailingStop": true,
+      "trailingStopPercent": 1.5,
+      "cooldownMinutes": 8
+    },
+    "stats": {
+      "totalTrades": 32,
+      "winRate": 64.5,
+      "totalPnl": 2950.4,
+      "lastTriggeredAt": "2026-10-09T12:06:52.919Z",
+      "lastSignalMessage": "BUY 366.42 SOL/USDT @ $111.13 (Bollinger Bands (20, 2.2σ) squeeze expansion breakout)"
+    },
+    "createdAt": "2026-10-02T00:00:00Z",
+    "updatedAt": "2026-10-09T12:11:23.315Z"
+  },
+  {
+    "id": "strat-4",
+    "name": "MACD Momentum Swing Bot",
+    "description": "Trend-following swing algo for high-volume equities triggered by MACD histogram momentum shifts.",
+    "symbol": "NVDA",
+    "timeframe": "1h",
+    "direction": "LONG_ONLY",
+    "type": "MACD_MOMENTUM",
+    "enabled": false,
+    "status": "PAUSED",
+    "parameters": {
+      "macdFast": 12,
+      "macdSlow": 26,
+      "macdSignal": 9,
+      "volumeConfirmation": true
+    },
+    "risk": {
+      "allocationPercent": 10,
+      "leverage": 3,
+      "stopLossPercent": 2.5,
+      "takeProfitPercent": 6,
+      "isTrailingStop": false,
+      "cooldownMinutes": 15
+    },
+    "stats": {
+      "totalTrades": 19,
+      "winRate": 63.2,
+      "totalPnl": 1890,
+      "lastTriggeredAt": "2026-10-09T09:06:24.056Z",
+      "lastSignalMessage": "MACD histogram turned positive with green volume"
+    },
+    "createdAt": "2026-10-03T00:00:00Z",
+    "updatedAt": "2026-10-09T12:06:24.056Z"
+  },
+  {
+    "id": "strat-5",
+    "name": "Gold Safe-Haven Trend Bot",
+    "description": "Macro precious metals accumulator utilizing multi-period moving averages and tight trailing stops.",
+    "symbol": "XAU/USD",
+    "timeframe": "1h",
+    "direction": "LONG_ONLY",
+    "type": "EMA_CROSS",
+    "enabled": true,
+    "status": "TRIGGERED",
+    "parameters": {
+      "emaFastPeriod": 12,
+      "emaSlowPeriod": 34,
+      "trendEmaPeriod": 100
+    },
+    "risk": {
+      "allocationPercent": 7,
+      "leverage": 20,
+      "stopLossPercent": 1,
+      "takeProfitPercent": 3,
+      "isTrailingStop": true,
+      "trailingStopPercent": 0.7,
+      "cooldownMinutes": 10
+    },
+    "stats": {
+      "totalTrades": 47,
+      "winRate": 71.1,
+      "totalPnl": 5640.8,
+      "lastTriggeredAt": "2026-10-10T14:14:35.627Z",
+      "lastSignalMessage": "BUY 0.74 XAU/USD @ $2,686.18 (EMA(12) $2692.08 crossed above EMA(34) $2683.94 · Trend confirmed)"
+    },
+    "createdAt": "2026-10-03T00:00:00Z",
+    "updatedAt": "2026-10-10T14:10:54.023Z"
+  }
+]

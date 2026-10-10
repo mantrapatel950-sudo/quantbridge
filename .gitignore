@@ -1,0 +1,13 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+
+# Sensitive Exchange API Keys & Accounts
+data/exchange_credentials.json
+data/exchange_accounts.json
