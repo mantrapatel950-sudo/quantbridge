@@ -24,6 +24,13 @@ import { verifyAndFetchBalance, ExchangeCredentials, executeLiveExchangeOrder, g
 
 dotenv.config();
 
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception caught safely:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Process] Unhandled Rejection caught safely at:', promise, 'reason:', reason);
+});
+
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
