@@ -1,7 +1,7 @@
 {
   "isKillSwitchActive": false,
-  "tradingMode": "DEMO",
-  "virtualBalance": 1000,
+  "tradingMode": "REAL",
+  "virtualBalance": 100000,
   "realBalance": 25000,
   "riskSettings": {
     "maxDailyLossPercent": 4,
@@ -11,29 +11,38 @@
     "slippageTolerancePercent": 0.1
   },
   "brokerConfig": {
-    "broker": "Binance",
-    "apiKeyMasked": "PrHv••••••••••••oUJ7",
-    "apiSecretMasked": "SK••••••••••••••••••••••••nQrH",
+    "broker": "SharkExchange",
+    "apiKeyMasked": "2808••••••••••••4a21",
+    "apiSecretMasked": "SK••••••••••••••••••••••••e094",
     "isSandbox": false,
     "status": "CONNECTED",
-    "lastPingMs": 1284,
+    "lastPingMs": 898,
     "encryptionStandard": "AES-256-GCM",
     "accountType": "FUTURES",
-    "lastSyncedAt": "2026-10-10T17:17:38.394Z",
+    "lastSyncedAt": "2026-10-11T13:35:29.199Z",
     "assetBreakdown": [],
+    "walletBalance": 0,
+    "useAllocatedCapital": true,
     "connectedAccounts": [
+      {
+        "broker": "SharkExchange",
+        "apiKeyMasked": "2808••••••••4a21",
+        "isSandbox": false,
+        "accountType": "FUTURES",
+        "status": "CONNECTED",
+        "lastPingMs": 898,
+        "lastSyncedAt": "2026-10-11T13:35:25.435Z",
+        "walletBalance": 0
+      },
       {
         "broker": "Binance",
         "apiKeyMasked": "PrHv••••••••oUJ7",
         "isSandbox": false,
         "accountType": "FUTURES",
-        "status": "CONNECTED",
-        "lastPingMs": 789,
-        "lastSyncedAt": "2026-10-10T16:05:21.803Z",
+        "status": "CONFIGURED",
+        "lastPingMs": 0,
         "walletBalance": 0
       }
-    ],
-    "walletBalance": 0,
-    "useAllocatedCapital": true
+    ]
   }
 }

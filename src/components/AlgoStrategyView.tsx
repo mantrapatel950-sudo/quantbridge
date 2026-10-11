@@ -44,6 +44,9 @@ interface Props {
   algoEngine?: AlgoEngineState;
   onRefreshState: () => void;
   onSelectSymbol?: (symbol: string) => void;
+  tradingMode?: 'DEMO' | 'REAL';
+  brokerConfig?: any;
+  onNavigateToBroker?: () => void;
 }
 
 const AVAILABLE_SYMBOLS = [
@@ -100,6 +103,9 @@ export const AlgoStrategyView: React.FC<Props> = ({
   algoEngine,
   onRefreshState,
   onSelectSymbol,
+  tradingMode = 'DEMO',
+  brokerConfig,
+  onNavigateToBroker,
 }) => {
   const [strategies, setStrategies] = useState<StrategyConfig[]>(algoEngine?.strategies || []);
   const [is247Active, setIs247Active] = useState<boolean>(algoEngine?.is247Active ?? true);
@@ -547,6 +553,54 @@ export const AlgoStrategyView: React.FC<Props> = ({
           </div>
         </div>
       </div>
+
+      {/* Live Exchange Order Routing Alert Banner */}
+      {tradingMode === 'REAL' ? (
+        <div className={`p-4 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+          brokerConfig?.status === 'CONNECTED'
+            ? 'bg-emerald-950/40 border-emerald-500/30 text-emerald-300'
+            : 'bg-amber-950/40 border-amber-500/30 text-amber-300'
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className={`p-2 rounded-lg ${brokerConfig?.status === 'CONNECTED' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}>
+              <Radio className="w-5 h-5 animate-pulse" />
+            </div>
+            <div>
+              <div className="text-xs font-mono font-bold flex items-center gap-2">
+                <span>LIVE EXCHANGE ROUTING:</span>
+                <span className="text-white font-bold">{brokerConfig?.broker || 'Exchange'}</span>
+                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                  brokerConfig?.status === 'CONNECTED'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                    : 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                }`}>
+                  {brokerConfig?.status === 'CONNECTED' ? 'CONNECTED & ARMED' : (brokerConfig?.status || 'DISCONNECTED')}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                {brokerConfig?.status === 'CONNECTED'
+                  ? `Active 24/7 algorithms and triggers will submit real orders directly to your ${brokerConfig?.broker || 'exchange'} account. Live Balance: $${(brokerConfig?.walletBalance ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`
+                  : `Real execution paused: Connect ${brokerConfig?.broker || 'Exchange'} API keys in the Broker & Risk tab to route real trades.`}
+              </p>
+            </div>
+          </div>
+          {onNavigateToBroker && brokerConfig?.status !== 'CONNECTED' && (
+            <button
+              onClick={onNavigateToBroker}
+              className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-mono text-xs font-bold rounded-lg transition-colors shrink-0 cursor-pointer shadow-md"
+            >
+              Connect {brokerConfig?.broker || 'Exchange'} &rarr;
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="p-3 bg-blue-950/30 border border-blue-500/20 rounded-xl flex items-center justify-between text-xs text-blue-300 font-mono">
+          <div className="flex items-center gap-2.5">
+            <ShieldAlert className="w-4 h-4 text-blue-400 shrink-0" />
+            <span>Virtual Paper Trading Mode active ($100k demo balance). Switch to REAL in the top bar to auto-trade on your real crypto exchange.</span>
+          </div>
+        </div>
+      )}
 
       {/* SUB-VIEW SWITCHER: Strategies Grid vs Real-Time Signal Telemetry */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-3">

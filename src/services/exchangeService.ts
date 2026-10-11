@@ -1203,72 +1203,103 @@ export async function executeLiveExchangeOrder(
   // 2. SHARK EXCHANGE
   if (brokerKey.includes('SHARK')) {
     const baseUrl = (credentials.customEndpoint || 'https://api.sharkexchange.in').replace(/\/$/, '');
-    const path = '/v1/order/place-order';
+    const paths = ['/v1/order/place-order', '/v1/order/create'];
     const formattedSymbol = symbol.replace('/', '').toUpperCase();
 
-    try {
-      const nowMs = Date.now() + (sharkServerTimeOffsetSeconds * 1000);
-      const timestamp = nowMs.toString();
-      const payloadObj = {
-        symbol: formattedSymbol,
-        side: side.toUpperCase(),
-        type: orderType.toUpperCase(),
-        quantity: qty,
-        timestamp,
-        ...(orderType === 'LIMIT' && price ? { price } : {}),
-      };
-      const payloadStr = JSON.stringify(payloadObj);
-      const signature = crypto.createHmac('sha256', apiSecret).update(payloadStr).digest('hex');
+    let attempt = 0;
+    let lastErrorMsg = '';
 
-      const res = await fetchWithTimeout(`${baseUrl}${path}`, {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'User-Agent': 'QuantBridge-ExecutionEngine/1.0',
-          'api-key': apiKey,
-          'signature': signature,
-        },
-        body: payloadStr,
-      }, 6000);
-
-      const data = await res.json().catch(() => null);
-
-      if (res.ok && (data?.success === true || data?.orderId || data?.id)) {
-        const orderId = String(data.orderId || data.id || `SHARK-${Date.now()}`);
-        return {
-          success: true,
-          status: 'FILLED',
-          orderId,
-          executedPrice: price,
-          executedQty: qty,
-          message: `Order successfully placed on Shark Exchange (ID: ${orderId})`,
-          broker: 'Shark Exchange',
+    while (attempt < 2) {
+      attempt++;
+      try {
+        const nowMs = Date.now() + (sharkServerTimeOffsetSeconds * 1000);
+        const timestamp = nowMs.toString();
+        const payloadObj: any = {
+          symbol: formattedSymbol,
+          side: side.toUpperCase(),
+          type: orderType.toUpperCase(),
+          quantity: qty,
+          timestamp,
         };
-      } else {
-        const errMsg = data?.message || data?.details || data?.error || `Shark HTTP ${res.status}`;
-        return {
-          success: false,
-          status: 'REJECTED',
-          message: `Shark Exchange rejected order: ${errMsg}`,
-          broker: 'Shark Exchange',
-        };
+        if (orderType === 'LIMIT' && price) {
+          payloadObj.price = price;
+        }
+        const payloadStr = JSON.stringify(payloadObj);
+        const signature = crypto.createHmac('sha256', apiSecret).update(payloadStr).digest('hex');
+
+        for (const path of paths) {
+          const res = await fetchWithTimeout(`${baseUrl}${path}?timestamp=${timestamp}`, {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+              'User-Agent': 'QuantBridge-ExecutionEngine/1.0',
+              'api-key': apiKey,
+              'signature': signature,
+              'timestamp': timestamp,
+            },
+            body: payloadStr,
+          }, 6000);
+
+          // Synchronize clock drift if Date header or expired error
+          const serverDateHeader = res.headers.get('date');
+          if (serverDateHeader) {
+            const serverMs = new Date(serverDateHeader).getTime();
+            if (!isNaN(serverMs)) {
+              const driftSeconds = Math.round((serverMs - Date.now()) / 1000);
+              if (Math.abs(driftSeconds - sharkServerTimeOffsetSeconds) > 3) {
+                sharkServerTimeOffsetSeconds = driftSeconds;
+              }
+            }
+          }
+
+          const data = await res.json().catch(() => null);
+
+          if (res.ok && (data?.success === true || data?.orderId || data?.id || data?.data?.orderId)) {
+            const orderId = String(data?.orderId || data?.id || data?.data?.orderId || `SHARK-${Date.now()}`);
+            return {
+              success: true,
+              status: 'FILLED',
+              orderId,
+              executedPrice: price,
+              executedQty: qty,
+              message: `Order successfully placed on Shark Exchange (ID: ${orderId})`,
+              broker: 'Shark Exchange',
+            };
+          }
+
+          if (data?.message?.includes('expired') || data?.details?.includes('expired')) {
+            break; // retry outer attempt with updated offset
+          }
+
+          if (res.status === 404) {
+            continue; // try next candidate path
+          }
+
+          lastErrorMsg = data?.message || data?.details || data?.error || `Shark HTTP ${res.status}`;
+          break;
+        }
+      } catch (err: any) {
+        lastErrorMsg = err.message;
       }
-    } catch (err: any) {
-      return {
-        success: false,
-        status: 'REJECTED',
-        message: `Shark Exchange execution error: ${err.message}`,
-        broker: 'Shark Exchange',
-      };
     }
+
+    return {
+      success: false,
+      status: 'REJECTED',
+      message: `Shark Exchange rejected order: ${lastErrorMsg || 'Order placement failed'}`,
+      broker: 'Shark Exchange',
+    };
   }
 
-  // 3. BINANCE FUTURES
+  // 3. BINANCE (Futures & Spot)
   if (brokerKey.includes('BINANCE')) {
+    const isFutures = credentials.accountType === 'FUTURES';
     const isTestnet = credentials.isSandbox;
-    const baseUrl = isTestnet ? 'https://testnet.binancefuture.com' : 'https://fapi.binance.com';
-    const path = '/fapi/v1/order';
+    const baseUrl = isFutures
+      ? (isTestnet ? 'https://testnet.binancefuture.com' : 'https://fapi.binance.com')
+      : (isTestnet ? 'https://testnet.binance.vision' : 'https://api.binance.com');
+    const path = isFutures ? '/fapi/v1/order' : '/api/v3/order';
     const formattedSymbol = symbol.replace('/', '').toUpperCase();
     const timestamp = Date.now().toString();
 
@@ -1298,9 +1329,9 @@ export async function executeLiveExchangeOrder(
           success: true,
           status: 'FILLED',
           orderId: String(data.orderId),
-          executedPrice: parseFloat(data.avgPrice || price || '0'),
+          executedPrice: parseFloat(data.avgPrice || data.fills?.[0]?.price || price || '0'),
           executedQty: parseFloat(data.executedQty || qty.toString()),
-          message: `Order filled on Binance Futures (ID: ${data.orderId})`,
+          message: `Order filled on Binance ${isFutures ? 'Futures' : 'Spot'} (ID: ${data.orderId})`,
           broker: 'Binance',
         };
       } else {

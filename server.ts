@@ -447,9 +447,43 @@ let exchangeCredentials = loadFromFile<StoredExchangeCredentials>('exchange_cred
 
 // Multi-Exchange Accounts Registry
 let allExchangeAccounts = loadFromFile<Record<string, StoredExchangeCredentials>>('exchange_accounts.json', {});
-if (exchangeCredentials.apiKey) {
+if (exchangeCredentials.apiKey && !exchangeCredentials.apiKey.includes('sample')) {
   allExchangeAccounts[exchangeCredentials.broker] = exchangeCredentials;
   saveToFile('exchange_accounts.json', allExchangeAccounts);
+}
+
+// Startup Reconciliation: Sync active accounts and credentials from user storage
+try {
+  const usersDir = path.join(__dirname, 'data', 'users');
+  if (fs.existsSync(usersDir)) {
+    const dirs = fs.readdirSync(usersDir);
+    for (const d of dirs) {
+      const uAccPath = path.join(usersDir, d, 'exchange_accounts.json');
+      if (fs.existsSync(uAccPath)) {
+        const uAccs = JSON.parse(fs.readFileSync(uAccPath, 'utf8'));
+        allExchangeAccounts = { ...uAccs, ...allExchangeAccounts };
+      }
+      const uCfgPath = path.join(usersDir, d, 'broker_config.json');
+      if (fs.existsSync(uCfgPath)) {
+        const uCfg = JSON.parse(fs.readFileSync(uCfgPath, 'utf8'));
+        if (uCfg && (uCfg.status === 'CONNECTED' || (uCfg.apiKeyMasked && uCfg.apiKeyMasked.length > 5))) {
+          brokerConfig = { ...uCfg };
+        }
+      }
+      const uCredsPath = path.join(usersDir, d, 'exchange_credentials.json');
+      if (fs.existsSync(uCredsPath)) {
+        const uCreds = JSON.parse(fs.readFileSync(uCredsPath, 'utf8'));
+        if (uCreds && uCreds.apiKey && !uCreds.apiKey.includes('sample') && uCreds.apiSecret) {
+          exchangeCredentials = { ...uCreds };
+        }
+      }
+    }
+  }
+} catch {}
+
+// If active broker is configured in accounts registry, lock in active credentials
+if (brokerConfig?.broker && allExchangeAccounts[brokerConfig.broker]) {
+  exchangeCredentials = { ...allExchangeAccounts[brokerConfig.broker] };
 }
 
 function getRequestUserId(req: Request): string {
@@ -474,10 +508,9 @@ function getUserExchangeCredentials(userId: string): StoredExchangeCredentials {
 }
 
 function saveUserExchangeCredentials(userId: string, creds: StoredExchangeCredentials): void {
-  if (userId === 'default') {
-    exchangeCredentials = creds;
-    saveToFile('exchange_credentials.json', exchangeCredentials);
-  } else {
+  exchangeCredentials = creds;
+  saveToFile('exchange_credentials.json', exchangeCredentials);
+  if (userId !== 'default') {
     saveUserFile(userId, 'exchange_credentials.json', creds);
   }
 }
@@ -490,10 +523,9 @@ function getUserExchangeAccounts(userId: string): Record<string, StoredExchangeC
 }
 
 function saveUserExchangeAccounts(userId: string, accounts: Record<string, StoredExchangeCredentials>): void {
-  if (userId === 'default') {
-    allExchangeAccounts = accounts;
-    saveToFile('exchange_accounts.json', allExchangeAccounts);
-  } else {
+  allExchangeAccounts = { ...allExchangeAccounts, ...accounts };
+  saveToFile('exchange_accounts.json', allExchangeAccounts);
+  if (userId !== 'default') {
     saveUserFile(userId, 'exchange_accounts.json', accounts);
   }
 }
@@ -525,12 +557,39 @@ function getUserBrokerConfig(userId: string, includeConnectedAccounts = true): a
 }
 
 function saveUserBrokerConfig(userId: string, config: any): void {
-  if (userId === 'default') {
-    brokerConfig = config;
-    persistAppState();
-  } else {
+  brokerConfig = { ...config };
+  persistAppState();
+  if (userId !== 'default') {
     saveUserFile(userId, 'broker_config.json', config);
   }
+}
+
+function getActiveBrokerConfig(userId?: string): any {
+  if (userId && userId !== 'default') {
+    const cfg = getUserBrokerConfig(userId);
+    if (cfg && (cfg.status === 'CONNECTED' || (cfg.apiKeyMasked && cfg.apiKeyMasked.length > 5))) {
+      return cfg;
+    }
+  }
+  if (brokerConfig && (brokerConfig.status === 'CONNECTED' || (brokerConfig.apiKeyMasked && brokerConfig.apiKeyMasked.length > 5))) {
+    return brokerConfig;
+  }
+  try {
+    const usersDir = path.join(__dirname, 'data', 'users');
+    if (fs.existsSync(usersDir)) {
+      const dirs = fs.readdirSync(usersDir);
+      for (const d of dirs) {
+        const p = path.join(usersDir, d, 'broker_config.json');
+        if (fs.existsSync(p)) {
+          const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+          if (cfg && (cfg.status === 'CONNECTED' || (cfg.apiKeyMasked && cfg.apiKeyMasked.length > 5))) {
+            return cfg;
+          }
+        }
+      }
+    }
+  } catch {}
+  return brokerConfig;
 }
 
 function getConnectedAccountsList(userId: string = 'default'): any[] {
@@ -1086,14 +1145,32 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
     ? Number((price * (1 - (1 / leverage) * 0.9)).toFixed(2))
     : Number((price * (1 + (1 / leverage) * 0.9)).toFixed(2));
 
-  const executionBroker = payload.broker || (tradingMode === 'DEMO' ? 'Virtual Paper Broker' : (brokerConfig.broker || 'Binance'));
+  const activeBrokerConfig = getActiveBrokerConfig(getRequestUserId(req));
+  const userCreds = getActiveExchangeCredentials(getRequestUserId(req));
+  const executionBroker = payload.broker || userCreds.broker || (tradingMode === 'DEMO' ? 'Virtual Paper Broker' : (activeBrokerConfig.broker || 'Binance'));
 
   // REAL Live Trading Execution Safeguard & Dispatch
   let liveExchangeOrderId: string | undefined;
   if (tradingMode === 'REAL') {
-    const liveBal = brokerConfig.walletBalance ?? 0;
-    if (brokerConfig.status !== 'CONNECTED' || liveBal <= 0) {
-      const rejectMsg = `REJECTED: Live trading halted. No funds in ${executionBroker} wallet ($0.00). Deposit funds in the exchange to start trading.`;
+    if (!userCreds.apiKey || !userCreds.apiSecret) {
+      const rejectMsg = `REJECTED: No API credentials found for ${executionBroker}. Connect in Broker & Risk tab.`;
+      const log: WebhookLog = {
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        ip: clientIp,
+        status: 'REJECTED',
+        payload,
+        message: rejectMsg,
+        latencyMs: Date.now() - startTime,
+      };
+      webhookLogs.unshift(log);
+      return res.status(400).json({ error: 'Not Connected', message: rejectMsg });
+    }
+
+    const liveBal = activeBrokerConfig.walletBalance ?? 0;
+    const hasFunds = liveBal > 0 || activeBrokerConfig.useAllocatedCapital || realBalance > 0;
+    if (!hasFunds) {
+      const rejectMsg = `REJECTED: Live trading halted. No funds in ${executionBroker} wallet ($0.00). Deposit funds or set Allocated Working Capital.`;
       const log: WebhookLog = {
         id: `log-${Date.now()}`,
         timestamp: new Date().toISOString(),
@@ -1107,8 +1184,9 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
       return res.status(400).json({ error: 'No Exchange Funds', message: rejectMsg });
     }
 
-    if (marginRequired > liveBal) {
-      const rejectMsg = `REJECTED: Insufficient exchange funds. Margin required ($${marginRequired.toLocaleString()}) exceeds available balance ($${liveBal.toLocaleString()}).`;
+    const effectiveBal = liveBal > 0 ? liveBal : (realBalance > 0 ? realBalance : 10000);
+    if (marginRequired > effectiveBal) {
+      const rejectMsg = `REJECTED: Insufficient exchange funds. Margin required ($${marginRequired.toLocaleString()}) exceeds available capital ($${effectiveBal.toLocaleString()}).`;
       const log: WebhookLog = {
         id: `log-${Date.now()}`,
         timestamp: new Date().toISOString(),
@@ -1123,7 +1201,7 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
     }
 
     // Place actual live order on the connected crypto exchange API!
-    const userCreds = getUserExchangeCredentials(getRequestUserId(req));
+    console.log(`[TradingView Webhook] 🚀 Placing REAL Live Order on ${executionBroker} for ${symbol}: ${signal} ${qty} @ $${price}`);
     const liveOrderRes = await executeLiveExchangeOrder(userCreds, {
       symbol,
       side: signal as 'BUY' | 'SELL',
@@ -1149,6 +1227,7 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
     }
 
     liveExchangeOrderId = liveOrderRes.orderId;
+    console.log(`[TradingView Webhook] ✅ LIVE REAL ORDER FILLED on ${executionBroker}! Order ID: ${liveExchangeOrderId}`);
   }
 
   const newPosition: Position = {
@@ -1600,22 +1679,35 @@ app.post('/api/trades/place-order', async (req: Request, res: Response) => {
 
   let liveExchangeOrderId: string | undefined;
   if (tradingMode === 'REAL') {
-    const liveBal = brokerConfig.walletBalance ?? 0;
-    if (brokerConfig.status !== 'CONNECTED' || liveBal <= 0) {
+    const activeBrokerConfig = getActiveBrokerConfig(getRequestUserId(req));
+    const userCreds = getActiveExchangeCredentials(getRequestUserId(req));
+    const executionBroker = userCreds.broker || activeBrokerConfig.broker || 'Exchange';
+
+    if (!userCreds.apiKey || !userCreds.apiSecret) {
+      return res.status(400).json({
+        error: 'Exchange Not Connected',
+        message: `Cannot place live trade: No API credentials configured for ${executionBroker}. Connect in Broker & Risk tab.`,
+      });
+    }
+
+    const liveBal = activeBrokerConfig.walletBalance ?? 0;
+    const hasFunds = liveBal > 0 || activeBrokerConfig.useAllocatedCapital || realBalance > 0;
+    if (!hasFunds) {
       return res.status(400).json({
         error: 'No Exchange Funds',
-        message: `Cannot place live trade: ${brokerConfig.broker || 'exchange'} wallet has $0.00. Please deposit funds into your exchange account to execute live trades.`,
+        message: `Cannot place live trade: ${executionBroker} wallet has $0.00. Please deposit funds into your exchange account or set Working Capital.`,
       });
     }
 
-    if (marginRequired > liveBal) {
+    const effectiveBal = liveBal > 0 ? liveBal : (realBalance > 0 ? realBalance : 10000);
+    if (marginRequired > effectiveBal) {
       return res.status(400).json({
         error: 'Insufficient Funds',
-        message: `Margin requirement ($${marginRequired.toLocaleString()}) exceeds live exchange funds ($${liveBal.toLocaleString()}).`,
+        message: `Margin requirement ($${marginRequired.toLocaleString()}) exceeds live available capital ($${effectiveBal.toLocaleString()}).`,
       });
     }
 
-    const userCreds = getUserExchangeCredentials(getRequestUserId(req));
+    console.log(`[Manual Order] 🚀 Placing REAL Live Order on ${executionBroker} for ${symbol}: ${orderSide} ${numQty} @ $${numPrice}`);
     const liveResult = await executeLiveExchangeOrder(userCreds, {
       symbol,
       side: orderSide === 'LONG' ? 'BUY' : 'SELL',
@@ -1633,6 +1725,7 @@ app.post('/api/trades/place-order', async (req: Request, res: Response) => {
     }
 
     liveExchangeOrderId = liveResult.orderId;
+    console.log(`[Manual Order] ✅ LIVE REAL ORDER FILLED on ${executionBroker}! Order ID: ${liveExchangeOrderId}`);
   } else if (marginRequired > currentBal) {
     return res.status(400).json({
       error: 'Insufficient Funds',
@@ -1977,7 +2070,19 @@ app.post('/api/settings/broker', async (req: Request, res: Response) => {
 
   if (broker) {
     userBrokerConfig.broker = broker;
-    userCreds.broker = broker;
+    if (userAccounts[broker] && (!apiKey || !apiKey.trim())) {
+      // Auto-restore saved credentials for this broker from user's account registry
+      Object.assign(userCreds, userAccounts[broker]);
+      userBrokerConfig.isSandbox = userCreds.isSandbox ?? false;
+      userBrokerConfig.accountType = userCreds.accountType ?? 'SPOT';
+      userBrokerConfig.apiKeyMasked = userCreds.apiKey.length > 8
+        ? userCreds.apiKey.slice(0, 4) + '••••••••••••' + userCreds.apiKey.slice(-4)
+        : '••••••••';
+      userBrokerConfig.apiSecretMasked = 'SK••••••••••••••••••••••••' + (userCreds.apiSecret.length > 4 ? userCreds.apiSecret.slice(-4) : '');
+      userBrokerConfig.passphraseMasked = userCreds.passphrase ? '••••••••' : undefined;
+    } else {
+      userCreds.broker = broker;
+    }
   }
   if (typeof isSandbox === 'boolean') {
     userBrokerConfig.isSandbox = isSandbox;
@@ -1993,13 +2098,13 @@ app.post('/api/settings/broker', async (req: Request, res: Response) => {
   }
 
   // Update credentials if provided
-  if (apiKey) {
+  if (apiKey && apiKey.trim()) {
     userCreds.apiKey = apiKey.trim();
     userBrokerConfig.apiKeyMasked = apiKey.trim().length > 8
       ? apiKey.trim().slice(0, 4) + '••••••••••••' + apiKey.trim().slice(-4)
       : '••••••••';
   }
-  if (apiSecret) {
+  if (apiSecret && apiSecret.trim()) {
     userCreds.apiSecret = apiSecret.trim();
     userBrokerConfig.apiSecretMasked = 'SK••••••••••••••••••••••••' + (apiSecret.trim().length > 4 ? apiSecret.trim().slice(-4) : '');
   }
@@ -2230,25 +2335,51 @@ async function getLiveSymbolPrice(sym: string): Promise<number> {
   return 100;
 }
 
-// Helper to get active exchange credentials for background algo bots
+// Helper to get active exchange credentials for background algo bots and webhooks
 function getActiveExchangeCredentials(userId?: string): StoredExchangeCredentials {
+  const isSampleKey = (k?: string) => !k || k.includes('sample') || k.includes('placeholder') || k.length < 8;
+
+  // 1. If explicit userId provided, check their credentials
   if (userId && userId !== 'default') {
     const u = getUserExchangeCredentials(userId);
-    if (u && u.apiKey && u.apiSecret) return u;
+    if (u && !isSampleKey(u.apiKey) && u.apiSecret) return u;
   }
-  if (exchangeCredentials && exchangeCredentials.apiKey && exchangeCredentials.apiSecret) {
+
+  // 2. Check current global credentials if valid
+  if (exchangeCredentials && !isSampleKey(exchangeCredentials.apiKey) && exchangeCredentials.apiSecret) {
     return exchangeCredentials;
   }
+
+  // 3. Check registered exchange accounts for the active broker
+  const activeCfg = getActiveBrokerConfig(userId);
+  const activeBroker = activeCfg?.broker || brokerConfig?.broker || 'Binance';
+  if (allExchangeAccounts[activeBroker] && !isSampleKey(allExchangeAccounts[activeBroker].apiKey)) {
+    return allExchangeAccounts[activeBroker];
+  }
+
+  // 4. Scan user directories for valid configured credentials
   try {
-    const fs = require('fs');
     const usersDir = path.join(__dirname, 'data', 'users');
     if (fs.existsSync(usersDir)) {
       const dirs = fs.readdirSync(usersDir);
       for (const d of dirs) {
+        // Try exchange_accounts.json for activeBroker first
+        const accPath = path.join(usersDir, d, 'exchange_accounts.json');
+        if (fs.existsSync(accPath)) {
+          const accs = JSON.parse(fs.readFileSync(accPath, 'utf8'));
+          if (accs[activeBroker] && !isSampleKey(accs[activeBroker].apiKey)) {
+            return accs[activeBroker];
+          }
+          // Any configured broker in accounts
+          for (const k of Object.keys(accs)) {
+            if (accs[k] && !isSampleKey(accs[k].apiKey)) return accs[k];
+          }
+        }
+        // Try exchange_credentials.json
         const p = path.join(usersDir, d, 'exchange_credentials.json');
         if (fs.existsSync(p)) {
           const creds = JSON.parse(fs.readFileSync(p, 'utf8'));
-          if (creds?.apiKey && creds?.apiSecret) return creds;
+          if (creds && !isSampleKey(creds.apiKey) && creds.apiSecret) return creds;
         }
       }
     }
@@ -2266,7 +2397,16 @@ async function executeStrategyOrderInternal(
 ): Promise<Position | null> {
   if (isKillSwitchActive) return null;
 
-  const currentBal = tradingMode === 'DEMO' ? virtualBalance : realBalance;
+  const activeBrokerConfig = getActiveBrokerConfig(userId);
+  const userCreds = getActiveExchangeCredentials(userId);
+  const executionBroker = userCreds.broker || activeBrokerConfig.broker || (tradingMode === 'DEMO' ? 'Virtual Paper Broker' : 'Binance');
+
+  // Determine working capital for trade sizing
+  const liveBal = activeBrokerConfig.walletBalance ?? 0;
+  const currentBal = tradingMode === 'DEMO'
+    ? virtualBalance
+    : (liveBal > 0 ? liveBal : (realBalance > 0 ? realBalance : 10000));
+
   const allocPct = strat.risk.allocationPercent || 5;
   const maxMargin = Math.max(100, (currentBal * allocPct) / 100);
   const lev = Math.max(1, Math.min(100, strat.risk.leverage || 10));
@@ -2285,18 +2425,44 @@ async function executeStrategyOrderInternal(
 
   // ROUTE REAL TRADES AUTOMATICALLY TO CONNECTED BROKER / CRYPTO EXCHANGE
   if (tradingMode === 'REAL') {
-    const liveBal = brokerConfig.walletBalance ?? 0;
-    const hasFunds = liveBal > 0 || brokerConfig.useAllocatedCapital;
-    if (brokerConfig.status !== 'CONNECTED' || !hasFunds) {
-      console.warn(`[Algo Engine] Cannot auto-trade: ${brokerConfig.broker || 'Exchange'} not connected or has $0 funds.`);
+    if (!userCreds.apiKey || !userCreds.apiSecret) {
+      const rejectReason = `Cannot auto-trade: No API credentials found for ${executionBroker}. Configure API Key in Broker & Risk tab.`;
+      console.warn(`[Algo Engine] ${rejectReason}`);
+      const rejectLog: AlgoSignalLog = {
+        id: `sig-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        timestamp: new Date().toISOString(),
+        strategyId: strat.id,
+        strategyName: strat.name,
+        symbol: strat.symbol,
+        action: side,
+        price,
+        reason: `NOT CONNECTED: ${rejectReason}`,
+        executed: false,
+      };
+      algoSignalLogs.unshift(rejectLog);
       return null;
     }
 
-    const userCreds = getActiveExchangeCredentials(userId);
-    if (!userCreds.apiKey || !userCreds.apiSecret) {
-      console.warn(`[Algo Engine] Cannot auto-trade: No active API Key/Secret found for ${brokerConfig.broker}.`);
+    const hasFunds = liveBal > 0 || activeBrokerConfig.useAllocatedCapital || realBalance > 0;
+    if (!hasFunds) {
+      const rejectReason = `Cannot auto-trade: ${executionBroker} wallet balance is $0.00. Deposit funds or enable Allocated Working Capital.`;
+      console.warn(`[Algo Engine] ${rejectReason}`);
+      const rejectLog: AlgoSignalLog = {
+        id: `sig-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        timestamp: new Date().toISOString(),
+        strategyId: strat.id,
+        strategyName: strat.name,
+        symbol: strat.symbol,
+        action: side,
+        price,
+        reason: `NO FUNDS: ${rejectReason}`,
+        executed: false,
+      };
+      algoSignalLogs.unshift(rejectLog);
       return null;
     }
+
+    console.log(`[Algo Engine] 🚀 Placing REAL Live Order on ${executionBroker} for ${strat.symbol}: ${side} ${qty} @ $${price} (leverage ${lev}x)`);
 
     // Place market order on real exchange API
     const liveOrderRes = await executeLiveExchangeOrder(userCreds, {
@@ -2309,7 +2475,7 @@ async function executeStrategyOrderInternal(
     });
 
     if (!liveOrderRes.success) {
-      console.warn(`[Algo Engine] Exchange rejected order for ${strat.name}: ${liveOrderRes.message}`);
+      console.warn(`[Algo Engine] ❌ Exchange rejected order for ${strat.name}: ${liveOrderRes.message}`);
       const rejectLog: AlgoSignalLog = {
         id: `sig-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         timestamp: new Date().toISOString(),
@@ -2326,7 +2492,21 @@ async function executeStrategyOrderInternal(
     }
 
     liveExchangeOrderId = liveOrderRes.orderId;
-    console.log(`[Algo Engine] LIVE REAL ORDER EXECUTED on ${userCreds.broker}! Order ID: ${liveExchangeOrderId}`);
+    console.log(`[Algo Engine] ✅ LIVE REAL ORDER EXECUTED on ${executionBroker}! Order ID: ${liveExchangeOrderId}`);
+
+    // Create success signal log
+    const successLog: AlgoSignalLog = {
+      id: `sig-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      timestamp: new Date().toISOString(),
+      strategyId: strat.id,
+      strategyName: strat.name,
+      symbol: strat.symbol,
+      action: side,
+      price: liveOrderRes.executedPrice || price,
+      reason: `LIVE ORDER FILLED on ${executionBroker} (ID: ${liveExchangeOrderId}) · ${reason}`,
+      executed: true,
+    };
+    algoSignalLogs.unshift(successLog);
   }
 
   // Compute SL and TP from strategy risk parameters
@@ -2754,7 +2934,9 @@ app.post('/api/algo/strategies/:id/trigger-now', async (req: Request, res: Respo
   const newPosition = await executeStrategyOrderInternal(strat, side, livePrice, reason, getRequestUserId(req));
 
   if (!newPosition) {
-    return res.status(400).json({ error: 'Failed to execute order (check kill switch or available margin)' });
+    const latestLog = algoSignalLogs[0];
+    const failureMsg = latestLog?.reason || 'Failed to execute order (check exchange connection, API keys, or available margin)';
+    return res.status(400).json({ error: failureMsg });
   }
 
   res.json({

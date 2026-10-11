@@ -763,6 +763,9 @@ export default function App() {
           <AlgoStrategyView
             algoEngine={appState.algoEngine}
             onRefreshState={loadState}
+            tradingMode={appState.tradingMode}
+            brokerConfig={appState.brokerConfig}
+            onNavigateToBroker={() => setActiveTab('broker')}
             onSelectSymbol={(sym) => {
               setSelectedSymbol(sym);
               setActiveTab('dashboard');
