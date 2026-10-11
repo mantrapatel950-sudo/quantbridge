@@ -2,7 +2,7 @@
   "isKillSwitchActive": false,
   "tradingMode": "REAL",
   "virtualBalance": 99987.620184,
-  "realBalance": 0,
+  "realBalance": 25000,
   "riskSettings": {
     "maxDailyLossPercent": 4,
     "maxOpenPositions": 5,
@@ -19,7 +19,7 @@
     "apiSecretMasked": "SK••••••••••••••••••••••••e094",
     "walletBalance": 0,
     "assetBreakdown": [],
-    "lastPingMs": 513,
+    "lastPingMs": 839,
     "connectedAccounts": [
       {
         "broker": "Binance",
@@ -36,13 +36,12 @@
         "isSandbox": false,
         "accountType": "FUTURES",
         "status": "CONNECTED",
-        "lastPingMs": 310,
-        "lastSyncedAt": "2026-10-11T15:59:45.784Z",
+        "lastPingMs": 513,
+        "lastSyncedAt": "2026-10-11T16:53:25.169Z",
         "walletBalance": 0
       }
     ],
-    "lastSyncedAt": "2026-10-11T16:53:25.169Z",
-    "useAllocatedCapital": false,
-    "errorMessage": "Connected to SharkExchange, but live wallet balance is $0.00. Trading will execute once funds are deposited into the exchange."
+    "lastSyncedAt": "2026-10-11T17:00:42.770Z",
+    "useAllocatedCapital": true
   }
 }

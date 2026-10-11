@@ -8,7 +8,7 @@
     "direction": "BOTH",
     "type": "PINE_SCRIPT",
     "enabled": true,
-    "status": "TRIGGERED",
+    "status": "RUNNING",
     "parameters": {
       "emaFastPeriod": 9,
       "emaSlowPeriod": 21,
@@ -52,7 +52,7 @@
     "direction": "BOTH",
     "type": "EMA_CROSS",
     "enabled": true,
-    "status": "RUNNING",
+    "status": "TRIGGERED",
     "parameters": {
       "emaFastPeriod": 9,
       "emaSlowPeriod": 21,
@@ -69,11 +69,11 @@
       "cooldownMinutes": 5
     },
     "stats": {
-      "totalTrades": 44,
+      "totalTrades": 45,
       "winRate": 69,
       "totalPnl": 5420.5,
-      "lastTriggeredAt": "2026-10-10T14:12:19.380Z",
-      "lastSignalMessage": "SELL 0.0121 BTC/USDT @ $82,833.73 (EMA(9) $82774.48 crossed below EMA(21) $82775.79 · Bearish death cross)"
+      "lastTriggeredAt": "2026-10-11T17:00:53.959Z",
+      "lastSignalMessage": "BUY 0.2377 BTC/USDT @ $84,138.17 (Manual Test Trigger: Verified all EMA_CROSS condition parameters & execution routing)"
     },
     "createdAt": "2026-10-01T00:00:00Z",
     "updatedAt": "2026-10-11T16:35:40.043Z"
