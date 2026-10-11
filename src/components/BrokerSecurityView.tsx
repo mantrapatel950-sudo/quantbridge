@@ -199,6 +199,7 @@ const SUPPORTED_EXCHANGES = [
     guide: [
       'Log into Delta Exchange (Global or India) > Profile > API Keys.',
       'Click "Create New API Key" and select "Trading" / Read permissions.',
+      'CRITICAL: In IP Access / Restrictions, select "Unrestricted (Any IP)" so dynamic ISP IP rotations never block your orders.',
       'Leave "Withdrawal" permissions unchecked for safety.',
       'Copy your API Key and API Secret below.',
       'For Delta India users, optionally set Custom Endpoint to https://api.india.delta.exchange.',
@@ -1097,29 +1098,51 @@ export const BrokerSecurityView: React.FC<Props> = ({
                       statusFeedback.message.toLowerCase().includes('ip address'));
 
                   if (isIpError && ipToWhitelist) {
+                    const isDelta = selectedBroker.toLowerCase().includes('delta');
+                    const deltaUrl = 'https://india.delta.exchange/app/settings/api-keys';
+
                     return (
-                      <div className="pt-2 border-t border-rose-900/50 flex flex-col sm:flex-row items-center justify-between gap-2 bg-black/40 p-2.5 rounded-lg">
-                        <span className="text-[11px] text-rose-200 font-sans">
-                          Click to copy this exact IP to whitelist:
-                        </span>
-                        <button
-                          type="button"
-                          id="copy-rejected-ip-btn"
-                          onClick={() => handleCopyIp(ipToWhitelist)}
-                          className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg transition-all text-xs cursor-pointer shadow-md"
-                        >
-                          {copiedIp === ipToWhitelist ? (
-                            <>
-                              <Check className="w-3.5 h-3.5" />
-                              <span>Copied {ipToWhitelist}!</span>
-                            </>
-                          ) : (
-                            <>
-                              <Copy className="w-3.5 h-3.5" />
-                              <span>Copy Whitelist IP: {ipToWhitelist}</span>
-                            </>
-                          )}
-                        </button>
+                      <div className="pt-2.5 border-t border-rose-900/50 space-y-2 bg-black/40 p-3 rounded-lg">
+                        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                          <span className="text-[11px] text-rose-200 font-sans">
+                            Click to copy your current outbound IP:
+                          </span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <button
+                              type="button"
+                              id="copy-rejected-ip-btn"
+                              onClick={() => handleCopyIp(ipToWhitelist)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg transition-all text-xs cursor-pointer shadow-md"
+                            >
+                              {copiedIp === ipToWhitelist ? (
+                                <>
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Copied {ipToWhitelist}!</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3.5 h-3.5" />
+                                  <span>Copy Whitelist IP: {ipToWhitelist}</span>
+                                </>
+                              )}
+                            </button>
+                            {isDelta && (
+                              <a
+                                href={deltaUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold rounded-lg transition-all text-xs border border-slate-700"
+                              >
+                                <ExternalLink className="w-3.5 h-3.5 text-indigo-400" />
+                                <span>Open Delta API Settings</span>
+                              </a>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded text-[11px] text-amber-200/90 leading-relaxed">
+                          💡 <strong>Permanent Solution (Stops error from repeating):</strong> Home broadband & mobile networks (Airtel, Jio, etc.) have dynamic rotating IPs that change periodically. In <strong>Delta Exchange &gt; API Keys</strong>, edit this API Key and select <strong>&quot;Unrestricted (Any IP)&quot;</strong>. This permanently prevents IP errors.
+                        </div>
                       </div>
                     );
                   }
