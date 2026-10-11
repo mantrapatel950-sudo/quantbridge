@@ -15,6 +15,7 @@ interface Props {
   onRequestNotifications?: () => void;
   onTestNotification?: () => void;
   activeAlgoBotsCount?: number;
+  userEmail?: string;
   onSignOut?: () => void;
   brokerName?: string;
   brokerStatus?: string;
@@ -30,12 +31,13 @@ export const TopNav: React.FC<Props> = ({
   tradingMode,
   onModeToggle,
   isKillSwitchActive,
-  onOpenKillSwitch,
   onResumeEngine,
+  onOpenKillSwitch,
   notificationPermission = 'default',
   onRequestNotifications,
   onTestNotification,
   activeAlgoBotsCount,
+  userEmail,
   onSignOut,
   brokerName = 'Binance',
   brokerStatus = 'CONNECTED',
@@ -319,15 +321,22 @@ export const TopNav: React.FC<Props> = ({
             />
           </button>
 
-          {/* Sign Out Button */}
+          {/* User Account & Sign Out */}
           {onSignOut && (
-            <button
-              onClick={onSignOut}
-              className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg border border-slate-800 bg-slate-900 transition-colors cursor-pointer"
-              title="Sign Out"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-lg px-2.5 py-1 shadow-sm">
+              <span className="text-[11px] font-mono text-slate-300 max-w-[140px] truncate" title={userEmail || 'Trader'}>
+                {userEmail || 'Trader'}
+              </span>
+              <button
+                onClick={onSignOut}
+                id="sign-out-btn"
+                className="flex items-center gap-1 text-[11px] font-bold text-rose-400 hover:text-white hover:bg-rose-600/80 px-2 py-0.5 rounded transition-all cursor-pointer border border-rose-900/50"
+                title="Sign Out of Session"
+              >
+                <LogOut className="w-3 h-3" />
+                <span>Sign Out</span>
+              </button>
+            </div>
           )}
 
           {/* Emergency Kill Switch */}

@@ -1,3 +1,4 @@
+// QuantBridge Algo Engine & Webhook Terminal Server
 import express, { Request, Response } from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -18,7 +19,7 @@ import {
   syncDeleteStrategy
 } from './src/dbSync';
 import { loadFromFile, saveToFile, loadUserFile, saveUserFile } from './src/storage';
-import { verifyAndFetchBalance, ExchangeCredentials } from './src/services/exchangeService';
+import { verifyAndFetchBalance, ExchangeCredentials, executeLiveExchangeOrder, getLastExchangeReportedIp } from './src/services/exchangeService';
 
 
 dotenv.config();
@@ -836,7 +837,7 @@ app.get('/api/state', (req: Request, res: Response) => {
 });
 
 // TradingView Webhook Receiver Endpoint
-app.post('/api/webhook/tradingview', async (req: Request, res: Response) => {
+app.post(['/api/webhook', '/api/webhook/tradingview'], async (req: Request, res: Response) => {
   const startTime = Date.now();
   const clientIp = req.headers['x-forwarded-for']?.toString() || req.socket.remoteAddress || '127.0.0.1';
   const payload = req.body;
@@ -1087,6 +1088,69 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
 
   const executionBroker = payload.broker || (tradingMode === 'DEMO' ? 'Virtual Paper Broker' : (brokerConfig.broker || 'Binance'));
 
+  // REAL Live Trading Execution Safeguard & Dispatch
+  let liveExchangeOrderId: string | undefined;
+  if (tradingMode === 'REAL') {
+    const liveBal = brokerConfig.walletBalance ?? 0;
+    if (brokerConfig.status !== 'CONNECTED' || liveBal <= 0) {
+      const rejectMsg = `REJECTED: Live trading halted. No funds in ${executionBroker} wallet ($0.00). Deposit funds in the exchange to start trading.`;
+      const log: WebhookLog = {
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        ip: clientIp,
+        status: 'REJECTED',
+        payload,
+        message: rejectMsg,
+        latencyMs: Date.now() - startTime,
+      };
+      webhookLogs.unshift(log);
+      return res.status(400).json({ error: 'No Exchange Funds', message: rejectMsg });
+    }
+
+    if (marginRequired > liveBal) {
+      const rejectMsg = `REJECTED: Insufficient exchange funds. Margin required ($${marginRequired.toLocaleString()}) exceeds available balance ($${liveBal.toLocaleString()}).`;
+      const log: WebhookLog = {
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        ip: clientIp,
+        status: 'REJECTED',
+        payload,
+        message: rejectMsg,
+        latencyMs: Date.now() - startTime,
+      };
+      webhookLogs.unshift(log);
+      return res.status(400).json({ error: 'Insufficient Funds', message: rejectMsg });
+    }
+
+    // Place actual live order on the connected crypto exchange API!
+    const userCreds = getUserExchangeCredentials(getRequestUserId(req));
+    const liveOrderRes = await executeLiveExchangeOrder(userCreds, {
+      symbol,
+      side: signal as 'BUY' | 'SELL',
+      qty,
+      price,
+      leverage,
+      orderType: 'MARKET',
+    });
+
+    if (!liveOrderRes.success) {
+      const rejectMsg = `EXCHANGE ORDER REJECTED: ${liveOrderRes.message}`;
+      const log: WebhookLog = {
+        id: `log-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        ip: clientIp,
+        status: 'REJECTED',
+        payload,
+        message: rejectMsg,
+        latencyMs: Date.now() - startTime,
+      };
+      webhookLogs.unshift(log);
+      return res.status(400).json({ error: 'Exchange Rejected', message: liveOrderRes.message });
+    }
+
+    liveExchangeOrderId = liveOrderRes.orderId;
+  }
+
   const newPosition: Position = {
     id: `pos-${Date.now()}`,
     symbol,
@@ -1111,7 +1175,10 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
   syncInsertPosition(newPosition);
   persistPositions();
 
-  const logMsg = `FILLED ${signal} ${qty} ${symbol} @ $${price} via ${tradingMode === 'DEMO' ? 'Virtual Paper Broker' : executionBroker + ' Direct API'}`;
+  const logMsg = tradingMode === 'REAL'
+    ? `LIVE FILLED on ${executionBroker}: ${signal} ${qty} ${symbol} @ $${price} (Order ID: ${liveExchangeOrderId || 'CONFIRMED'})`
+    : `FILLED ${signal} ${qty} ${symbol} @ $${price} via Virtual Paper Broker`;
+
   const log: WebhookLog = {
     id: `log-${Date.now()}`,
     timestamp: new Date().toISOString(),
@@ -1381,17 +1448,26 @@ app.post('/api/engine/mode', async (req: Request, res: Response) => {
             realBalance = syncRes.totalBalanceUsd;
             userBrokerConfig.useAllocatedCapital = false;
           } else {
-            // Actual exchange wallet has $0.00
-            userBrokerConfig.useAllocatedCapital = true;
-            if (!realBalance || realBalance <= 0) {
-              realBalance = 25000;
-            }
+            // Actual exchange wallet has $0.00 - do not create fake balance
+            realBalance = 0;
+            userBrokerConfig.useAllocatedCapital = false;
+            userBrokerConfig.errorMessage = `Connected to ${userBrokerConfig.broker}, but live wallet balance is $0.00. Trading will execute once funds are deposited into the exchange.`;
           }
+        } else {
+          realBalance = 0;
+          userBrokerConfig.walletBalance = 0;
+          userBrokerConfig.useAllocatedCapital = false;
         }
         saveUserBrokerConfig(userId, userBrokerConfig);
+        persistAppState();
       } catch (err) {
         console.warn('Auto balance sync failed on mode switch:', err);
       }
+    } else if (mode === 'REAL' && (!userCreds.apiKey || !userCreds.apiSecret)) {
+      realBalance = 0;
+      userBrokerConfig.errorMessage = 'Configure and connect your exchange API keys in Broker Settings before live trading.';
+      saveUserBrokerConfig(userId, userBrokerConfig);
+      persistAppState();
     }
     res.json({ success: true, tradingMode, realBalance, brokerConfig: getUserBrokerConfig(userId) });
   } else {
@@ -1522,10 +1598,45 @@ app.post('/api/trades/place-order', async (req: Request, res: Response) => {
   const marginRequired = Number(((numPrice * numQty) / numLev).toFixed(2));
   const currentBal = tradingMode === 'DEMO' ? virtualBalance : realBalance;
 
-  if (marginRequired > currentBal) {
+  let liveExchangeOrderId: string | undefined;
+  if (tradingMode === 'REAL') {
+    const liveBal = brokerConfig.walletBalance ?? 0;
+    if (brokerConfig.status !== 'CONNECTED' || liveBal <= 0) {
+      return res.status(400).json({
+        error: 'No Exchange Funds',
+        message: `Cannot place live trade: ${brokerConfig.broker || 'exchange'} wallet has $0.00. Please deposit funds into your exchange account to execute live trades.`,
+      });
+    }
+
+    if (marginRequired > liveBal) {
+      return res.status(400).json({
+        error: 'Insufficient Funds',
+        message: `Margin requirement ($${marginRequired.toLocaleString()}) exceeds live exchange funds ($${liveBal.toLocaleString()}).`,
+      });
+    }
+
+    const userCreds = getUserExchangeCredentials(getRequestUserId(req));
+    const liveResult = await executeLiveExchangeOrder(userCreds, {
+      symbol,
+      side: orderSide === 'LONG' ? 'BUY' : 'SELL',
+      qty: numQty,
+      price: numPrice,
+      leverage: numLev,
+      orderType: orderType === 'LIMIT' ? 'LIMIT' : 'MARKET',
+    });
+
+    if (!liveResult.success) {
+      return res.status(400).json({
+        error: 'Exchange Order Rejected',
+        message: liveResult.message,
+      });
+    }
+
+    liveExchangeOrderId = liveResult.orderId;
+  } else if (marginRequired > currentBal) {
     return res.status(400).json({
       error: 'Insufficient Funds',
-      message: `Margin requirement ($${marginRequired.toLocaleString()}) exceeds available funds ($${currentBal.toLocaleString()}).`,
+      message: `Margin requirement ($${marginRequired.toLocaleString()}) exceeds available demo funds ($${currentBal.toLocaleString()}).`,
     });
   }
 
@@ -1751,6 +1862,109 @@ setInterval(async () => {
     }
   }
 }, 3000);
+
+// Outbound Public IP Detection for Exchange Whitelisting (SharkExchange, Delta, Binance)
+let cachedServerIps: { ipv4?: string; ipv6?: string; detectedAt: number } | null = null;
+
+async function detectOutboundServerIps(): Promise<{ ipv4?: string; ipv6?: string; primary: string }> {
+  const now = Date.now();
+  if (cachedServerIps && now - cachedServerIps.detectedAt < 60000) {
+    return {
+      ipv4: cachedServerIps.ipv4,
+      ipv6: cachedServerIps.ipv6,
+      primary: cachedServerIps.ipv6 || cachedServerIps.ipv4 || '127.0.0.1',
+    };
+  }
+
+  let ipv4: string | undefined;
+  let ipv6: string | undefined;
+
+  // 1. Dual-stack / IPv6 detection
+  try {
+    const res: any = await Promise.race([
+      fetch('https://api64.ipify.org?format=json').then((r) => r.json()),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500)),
+    ]);
+    if (res?.ip) {
+      if (res.ip.includes(':')) ipv6 = res.ip;
+      else ipv4 = res.ip;
+    }
+  } catch {}
+
+  // 2. IPv4 dedicated detection
+  if (!ipv4) {
+    try {
+      const res: any = await Promise.race([
+        fetch('https://api.ipify.org?format=json').then((r) => r.json()),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500)),
+      ]);
+      if (res?.ip) ipv4 = res.ip;
+    } catch {}
+  }
+
+  // 3. Fallback to ifconfig.me
+  if (!ipv4 && !ipv6) {
+    try {
+      const res: any = await Promise.race([
+        fetch('https://ifconfig.me/ip').then((r) => r.text()),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2500)),
+      ]);
+      const trimmed = res?.trim();
+      if (trimmed) {
+        if (trimmed.includes(':')) ipv6 = trimmed;
+        else ipv4 = trimmed;
+      }
+    } catch {}
+  }
+
+  cachedServerIps = { ipv4, ipv6, detectedAt: now };
+  return {
+    ipv4,
+    ipv6,
+    primary: ipv6 || ipv4 || '127.0.0.1',
+  };
+}
+
+// GET /api/network/trusted-ip: Provides real-time server & client device IPs for exchange whitelisting
+app.get('/api/network/trusted-ip', async (req: Request, res: Response) => {
+  try {
+    const serverIps = await detectOutboundServerIps();
+
+    // Client device IP connecting to the dashboard
+    const forwarded = req.headers['x-forwarded-for'];
+    const rawClientIp = typeof forwarded === 'string'
+      ? forwarded.split(',')[0].trim()
+      : (req.socket.remoteAddress || '127.0.0.1');
+    const clientDeviceIp = rawClientIp.replace(/^::ffff:/, '');
+
+    // Any IP explicitly reported by SharkExchange or Delta in recent rejection
+    const exchangeReportedIp = getLastExchangeReportedIp();
+
+    const whitelistIps = new Set<string>();
+    if (exchangeReportedIp) whitelistIps.add(exchangeReportedIp);
+    if (serverIps.ipv6) whitelistIps.add(serverIps.ipv6);
+    if (serverIps.ipv4) whitelistIps.add(serverIps.ipv4);
+    if (clientDeviceIp && clientDeviceIp !== '127.0.0.1' && clientDeviceIp !== '::1') {
+      whitelistIps.add(clientDeviceIp);
+    }
+
+    // Default primary IP for user to copy
+    const primaryIp = exchangeReportedIp || serverIps.primary;
+
+    res.json({
+      success: true,
+      serverOutboundIp: primaryIp,
+      serverIpv4: serverIps.ipv4,
+      serverIpv6: serverIps.ipv6,
+      clientDeviceIp,
+      exchangeReportedIp: exchangeReportedIp || null,
+      whitelistIps: Array.from(whitelistIps),
+      tip: 'When creating or editing API Keys on Shark Exchange, Delta, or Binance, whitelist this IP under Trusted IPs / Whitelist, or select "Unrestricted (Any IP)".',
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // Update Broker & Crypto Exchange Settings
 app.post('/api/settings/broker', async (req: Request, res: Response) => {
@@ -2024,6 +2238,11 @@ function executeStrategyOrderInternal(
   reason: string
 ): Position | null {
   if (isKillSwitchActive) return null;
+
+  // Safeguard: Do not auto-execute in REAL mode if exchange wallet has zero funds
+  if (tradingMode === 'REAL' && (realBalance <= 0 || (brokerConfig.walletBalance ?? 0) <= 0)) {
+    return null;
+  }
 
   const currentBal = tradingMode === 'DEMO' ? virtualBalance : realBalance;
   const allocPct = strat.risk.allocationPercent || 5;

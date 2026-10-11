@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { BrokerConfig, RiskSettings, ExchangeAssetBalance, ExchangeAccountSummary } from '../types';
+import { fetchTrustedIp, TrustedIpResponse } from '../services/api';
 import {
   Shield,
   Key,
@@ -23,7 +24,11 @@ import {
   DollarSign,
   AlertCircle,
   Zap,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Copy,
+  Check,
+  ShieldCheck,
+  Wifi
 } from 'lucide-react';
 
 interface Props {
@@ -209,11 +214,11 @@ const SUPPORTED_EXCHANGES = [
     depositUrl: 'https://sharkexchange.in/',
     description: 'India-focused FIU-registered crypto derivatives exchange offering up to 150x perpetual futures with INR & USDT wallets.',
     guide: [
-      'Log into Shark Exchange (sharkexchange.in) > API Management.',
-      'Create a new API Key with "Trade-Only / Read" permissions.',
-      'Never enable withdrawal permissions.',
-      'Copy and paste your API Key and API Secret below.',
-      'Connected automatically to https://api.sharkexchange.in.',
+      'Log into Shark Exchange (sharkexchange.in) > Profile / Settings > API Management.',
+      'Create a new API Key with "Trade" & "Wallet/Read" permissions (Leave "Withdrawal" unchecked).',
+      'Set IP Access to "Unrestricted" (or whitelist your public IP) to prevent Access Denied errors.',
+      'CRITICAL: Copy the generated API Key and API Secret — do NOT enter your website login password.',
+      'Paste your API Key and Secret below and click Verify & Connect.',
     ],
   },
   {
@@ -274,6 +279,35 @@ export const BrokerSecurityView: React.FC<Props> = ({
   const activeExchangeMeta = SUPPORTED_EXCHANGES.find(
     (e) => e.id.toLowerCase() === selectedBroker.toLowerCase()
   ) || SUPPORTED_EXCHANGES[0];
+
+  // Trusted IP detection state for exchange whitelisting
+  const [trustedIpData, setTrustedIpData] = useState<TrustedIpResponse | null>(null);
+  const [copiedIp, setCopiedIp] = useState<string | null>(null);
+  const [isLoadingIp, setIsLoadingIp] = useState(false);
+
+  const loadTrustedIp = async () => {
+    setIsLoadingIp(true);
+    try {
+      const data = await fetchTrustedIp();
+      setTrustedIpData(data);
+    } catch (err) {
+      console.warn('Failed to fetch trusted IP:', err);
+    } finally {
+      setIsLoadingIp(false);
+    }
+  };
+
+  useEffect(() => {
+    loadTrustedIp();
+  }, [selectedBroker]);
+
+  const handleCopyIp = (ipToCopy: string) => {
+    try {
+      navigator.clipboard.writeText(ipToCopy);
+      setCopiedIp(ipToCopy);
+      setTimeout(() => setCopiedIp(null), 2500);
+    } catch {}
+  };
 
   const handlePasteKey = async () => {
     try {
@@ -823,6 +857,99 @@ export const BrokerSecurityView: React.FC<Props> = ({
               </div>
             </div>
 
+            {/* Live Trusted Whitelist IP Card for Public & Multi-Device Access */}
+            <div className="p-3.5 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 border border-emerald-500/30 rounded-xl shadow-lg relative overflow-hidden space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="flex items-start sm:items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center shrink-0 mt-0.5 sm:mt-0">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-bold text-slate-100">Your Trusted Whitelist IP</span>
+                      <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                        EXCHANGE ROUTING IP
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Required by <span className="text-slate-200 font-semibold">{activeExchangeMeta.name}</span> in API Management &gt; Trusted IPs (or select <span className="text-emerald-400 font-semibold">Unrestricted</span>).
+                    </p>
+                  </div>
+                </div>
+
+                {/* Primary IP Copy Button */}
+                {trustedIpData?.serverOutboundIp ? (
+                  <div className="flex items-center gap-1.5 self-start sm:self-auto bg-slate-950/90 border border-slate-800 rounded-lg px-2.5 py-1 shadow-inner">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                    <span className="text-xs font-mono font-bold text-emerald-300 select-all max-w-[210px] truncate" title={trustedIpData.serverOutboundIp}>
+                      {trustedIpData.serverOutboundIp}
+                    </span>
+                    <button
+                      type="button"
+                      id="copy-trusted-ip-btn"
+                      onClick={() => handleCopyIp(trustedIpData.serverOutboundIp)}
+                      className="ml-1 text-[11px] flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition-all cursor-pointer shadow-sm"
+                      title="Copy IP to clipboard"
+                    >
+                      {copiedIp === trustedIpData.serverOutboundIp ? (
+                        <>
+                          <Check className="w-3 h-3" />
+                          <span>Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" />
+                          <span>Copy IP</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={loadTrustedIp}
+                    className="text-[11px] text-slate-400 hover:text-emerald-400 flex items-center gap-1 font-mono cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isLoadingIp ? 'animate-spin' : ''}`} />
+                    <span>Detecting IP...</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Multi-Device & Alternate IPs Drawer */}
+              {trustedIpData && (
+                <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-slate-400">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-slate-500 flex items-center gap-1 font-sans">
+                      <Wifi className="w-3 h-3 text-cyan-400" />
+                      <span>Device IP:</span>
+                    </span>
+                    <span className="text-slate-300 bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
+                      {trustedIpData.clientDeviceIp}
+                    </span>
+                  </div>
+
+                  {trustedIpData.whitelistIps.length > 1 && (
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-slate-500 font-sans">All Available IPs:</span>
+                      {trustedIpData.whitelistIps.map((ip) => (
+                        <button
+                          key={ip}
+                          type="button"
+                          onClick={() => handleCopyIp(ip)}
+                          className="flex items-center gap-1 bg-slate-950 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 px-1.5 py-0.5 rounded transition-colors cursor-pointer"
+                          title="Click to copy this IP"
+                        >
+                          <span>{ip}</span>
+                          <Copy className="w-2.5 h-2.5 text-slate-500" />
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* API Key Input */}
             <div className="space-y-1 font-mono">
               <div className="flex items-center justify-between">
@@ -940,16 +1067,64 @@ export const BrokerSecurityView: React.FC<Props> = ({
               )}
             </button>
 
-            {/* Status Feedback Message */}
+            {/* Status Feedback Message with Dedicated IP Whitelist Copy Assist */}
             {statusFeedback && (
               <div
-                className={`p-3 rounded-lg border text-xs font-mono text-center ${
+                className={`p-3.5 rounded-xl border text-xs font-mono space-y-2.5 ${
                   statusFeedback.type === 'success'
                     ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300'
                     : 'bg-rose-950/60 border-rose-500/40 text-rose-300'
                 }`}
               >
-                {statusFeedback.message}
+                <div className="flex items-start gap-2.5">
+                  {statusFeedback.type === 'success' ? (
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  )}
+                  <div className="text-left leading-relaxed flex-1">{statusFeedback.message}</div>
+                </div>
+
+                {/* If the error message mentions an IP address or whitelist, offer immediate 1-click copy */}
+                {(() => {
+                  const ipMatch = statusFeedback.message.match(
+                    /(?:[0-9]{1,3}\.){3}[0-9]{1,3}|(?:[0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{1,4}/
+                  );
+                  const ipToWhitelist = ipMatch ? ipMatch[0] : (trustedIpData?.serverOutboundIp || null);
+                  const isIpError =
+                    statusFeedback.type === 'error' &&
+                    (statusFeedback.message.toLowerCase().includes('not whitelisted') ||
+                      statusFeedback.message.toLowerCase().includes('ip address'));
+
+                  if (isIpError && ipToWhitelist) {
+                    return (
+                      <div className="pt-2 border-t border-rose-900/50 flex flex-col sm:flex-row items-center justify-between gap-2 bg-black/40 p-2.5 rounded-lg">
+                        <span className="text-[11px] text-rose-200 font-sans">
+                          Click to copy this exact IP to whitelist:
+                        </span>
+                        <button
+                          type="button"
+                          id="copy-rejected-ip-btn"
+                          onClick={() => handleCopyIp(ipToWhitelist)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg transition-all text-xs cursor-pointer shadow-md"
+                        >
+                          {copiedIp === ipToWhitelist ? (
+                            <>
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Copied {ipToWhitelist}!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5" />
+                              <span>Copy Whitelist IP: {ipToWhitelist}</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
             )}
           </div>

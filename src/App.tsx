@@ -75,27 +75,66 @@ export default function App() {
   const marginAlertTriggeredRef = React.useRef<boolean>(false);
   const initialLoadDoneRef = React.useRef<boolean>(false);
 
-  // Check auth state on mount
+  // Check auth state on mount with fast cache and timeout protection
   useEffect(() => {
+    // 1. Immediately restore cached user session to avoid any freeze
+    try {
+      const cached = localStorage.getItem('qb_auth_user');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && parsed.email) {
+          setUser(parsed as User);
+          setIsAuthLoading(false);
+        }
+      }
+    } catch {}
+
     // DEV BYPASS: If no real Supabase keys are provided, mock authentication
     if (!isSupabaseConfigured) {
-      setUser({ id: 'local-dev-user', email: 'dev@quantbridge.com' } as User);
+      setUser((prev) => prev || ({ id: 'local-dev-user', email: 'dev@quantbridge.com' } as User));
       setIsAuthLoading(false);
       return;
     }
 
+    let isMounted = true;
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
-      setIsAuthLoading(false);
-    });
+    // Timeout Supabase getSession (2.5s max) so app never freezes on "Authenticating..." if database is unreachable
+    const sessionPromise = supabase.auth.getSession();
+    const timeoutPromise = new Promise<{ data: { session: null } }>((resolve) =>
+      setTimeout(() => resolve({ data: { session: null } }), 2500)
+    );
+
+    Promise.race([sessionPromise, timeoutPromise])
+      .then((res: any) => {
+        if (!isMounted) return;
+        const session = res?.data?.session;
+        if (session?.user) {
+          setUser(session.user);
+          try {
+            localStorage.setItem('qb_auth_user', JSON.stringify({ id: session.user.id, email: session.user.email }));
+          } catch {}
+        }
+        setIsAuthLoading(false);
+      })
+      .catch(() => {
+        if (isMounted) setIsAuthLoading(false);
+      });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+      if (!isMounted) return;
+      if (session?.user) {
+        setUser(session.user);
+        try {
+          localStorage.setItem('qb_auth_user', JSON.stringify({ id: session.user.id, email: session.user.email }));
+        } catch {}
+      }
       setIsAuthLoading(false);
     });
 
-    return () => subscription?.unsubscribe();
+    return () => {
+      isMounted = false;
+      subscription?.unsubscribe();
+    };
   }, []);
 
   // Check notification permission on mount
@@ -434,18 +473,33 @@ export default function App() {
   };
 
   const handleSignOut = async () => {
-    if (!isSupabaseConfigured) {
-      setUser(null);
-      showNotification('Signed out of Dev Mode.');
-      return;
-    }
+    // 1. Immediately clear user state so UI navigates to AuthView without waiting
+    setUser(null);
 
-    
+    // 2. Clear all local session tokens
     try {
-      await supabase.auth.signOut();
-      showNotification('Signed out successfully.');
-    } catch (err: any) {
-      showNotification(err.message || 'Failed to sign out', 'error');
+      localStorage.removeItem('qb_auth_user');
+      sessionStorage.removeItem('qb_auth_user');
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('supabase'))) {
+          localStorage.removeItem(key);
+        }
+      }
+    } catch {}
+
+    showNotification('Signed out successfully.');
+
+    // 3. Fire Supabase signOut with timeout protection in background
+    if (isSupabaseConfigured) {
+      try {
+        await Promise.race([
+          supabase.auth.signOut(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500)),
+        ]);
+      } catch {
+        // Ignored; local state and tokens are already wiped
+      }
     }
   };
 
@@ -462,7 +516,17 @@ export default function App() {
     return (
       <AuthView
         onGuestAccess={() => {
-          setUser({ id: 'guest-trader', email: 'guest@quantbridge.io' } as User);
+          const guestUser = { id: 'guest-trader', email: 'guest@quantbridge.io' } as User;
+          try {
+            localStorage.setItem('qb_auth_user', JSON.stringify(guestUser));
+          } catch {}
+          setUser(guestUser);
+        }}
+        onLoginSuccess={(authedUser) => {
+          try {
+            localStorage.setItem('qb_auth_user', JSON.stringify(authedUser));
+          } catch {}
+          setUser(authedUser as User);
         }}
       />
     );
@@ -494,6 +558,7 @@ export default function App() {
         onRequestNotifications={handleRequestNotifications}
         onTestNotification={handleTestNotification}
         activeAlgoBotsCount={appState.algoEngine?.activeBotCount}
+        userEmail={user.email || 'Trader'}
         onSignOut={handleSignOut}
         brokerName={appState.brokerConfig?.broker}
         brokerStatus={appState.brokerConfig?.status}

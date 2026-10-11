@@ -1,12 +1,34 @@
 import React, { useState } from 'react';
 import { supabase, isSupabaseConfigured } from '../supabaseClient';
-import { Shield, Mail, AlertCircle, Loader2, Zap, Terminal, Activity, ArrowRight, Lock, CheckCircle2 } from 'lucide-react';
+import { Shield, Mail, AlertCircle, Loader2, Zap, Terminal, Activity, ArrowRight, Lock, CheckCircle2, UserCheck, Database } from 'lucide-react';
 
 interface Props {
   onGuestAccess?: () => void;
+  onLoginSuccess?: (user: { id: string; email: string }) => void;
 }
 
-export const AuthView: React.FC<Props> = ({ onGuestAccess }) => {
+interface LocalAccount {
+  id: string;
+  email: string;
+  passwordHash: string;
+  createdAt: string;
+}
+
+const getLocalAccounts = (): Record<string, LocalAccount> => {
+  try {
+    return JSON.parse(localStorage.getItem('qb_local_accounts') || '{}');
+  } catch {
+    return {};
+  }
+};
+
+const saveLocalAccounts = (accounts: Record<string, LocalAccount>) => {
+  try {
+    localStorage.setItem('qb_local_accounts', JSON.stringify(accounts));
+  } catch {}
+};
+
+export const AuthView: React.FC<Props> = ({ onGuestAccess, onLoginSuccess }) => {
   const [view, setView] = useState<'login' | 'signup'>('login');
   
   // Email state
@@ -17,59 +39,173 @@ export const AuthView: React.FC<Props> = ({ onGuestAccess }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-
-  const checkConfig = () => {
-    if (!isSupabaseConfigured) {
-      setError('Supabase credentials not configured in .env. Use Instant Demo Access to proceed immediately.');
-      return false;
-    }
-    return true;
-  };
+  const [dbStatusNotice, setDbStatusNotice] = useState<string | null>(null);
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!checkConfig()) return;
-    
     setLoading(true);
     setError('');
     setSuccess('');
-    
-    try {
-      if (view === 'login') {
-        const { error: signInError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (signInError) throw signInError;
-      } else {
-        const { error: signUpError } = await supabase.auth.signUp({
-          email,
-          password,
-        });
-        if (signUpError) throw signUpError;
-        setSuccess('Account created! Check your email for confirmation or use Instant Demo mode.');
+    setDbStatusNotice(null);
+
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPassword = password.trim();
+
+    if (!cleanEmail || !cleanPassword) {
+      setError('Please provide a valid email and password.');
+      setLoading(false);
+      return;
+    }
+
+    // 1. If Supabase is configured, attempt authentication with a 3.5s timeout protection
+    let supabaseHandled = false;
+
+    if (isSupabaseConfigured) {
+      try {
+        const timeoutPromise = new Promise<{ error: Error }>((_, reject) =>
+          setTimeout(() => reject(new Error('DATABASE_CONNECTION_TIMEOUT')), 3500)
+        );
+
+        if (view === 'login') {
+          const res: any = await Promise.race([
+            supabase.auth.signInWithPassword({ email: cleanEmail, password: cleanPassword }),
+            timeoutPromise,
+          ]);
+
+          if (res?.error) {
+            const msg = res.error.message?.toLowerCase() || '';
+            // If it's explicitly bad credentials from an alive database, notify user
+            if (msg.includes('invalid login credentials') || msg.includes('invalid email or password')) {
+              // Check if they have a local account with this email/password before giving error
+              const localAccounts = getLocalAccounts();
+              if (localAccounts[cleanEmail] && localAccounts[cleanEmail].passwordHash === cleanPassword) {
+                setSuccess('Authenticated via Local Terminal Profile.');
+                setTimeout(() => {
+                  if (onLoginSuccess) onLoginSuccess({ id: localAccounts[cleanEmail].id, email: cleanEmail });
+                }, 400);
+                return;
+              }
+              setError('Invalid login credentials. Please check your email and password.');
+              setLoading(false);
+              return;
+            }
+            console.warn('Supabase sign-in rejected or database unreachable:', res.error);
+          } else if (res?.data?.user) {
+            supabaseHandled = true;
+            setSuccess('Authenticated successfully with Supabase Cloud!');
+            setTimeout(() => {
+              if (onLoginSuccess) {
+                onLoginSuccess({ id: res.data.user.id, email: res.data.user.email || cleanEmail });
+              }
+            }, 400);
+            return;
+          }
+        } else {
+          // Signup
+          const res: any = await Promise.race([
+            supabase.auth.signUp({ email: cleanEmail, password: cleanPassword }),
+            timeoutPromise,
+          ]);
+
+          if (res?.error) {
+            console.warn('Supabase sign-up rejected or database unreachable:', res.error);
+          } else if (res?.data?.user) {
+            supabaseHandled = true;
+            setSuccess('Account registered successfully! Entering terminal...');
+            setTimeout(() => {
+              if (onLoginSuccess) {
+                onLoginSuccess({ id: res.data.user.id, email: res.data.user.email || cleanEmail });
+              }
+            }, 500);
+            return;
+          }
+        }
+      } catch (err: any) {
+        console.warn('Supabase call failed/timed out:', err);
       }
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Authentication failed');
+    }
+
+    // 2. Seamless local terminal fallback:
+    // If Supabase timed out, is paused, or is offline, log in or register locally so user & friends are NEVER blocked!
+    try {
+      const accounts = getLocalAccounts();
+      if (view === 'login') {
+        const existing = accounts[cleanEmail];
+        if (existing) {
+          if (existing.passwordHash === cleanPassword) {
+            setSuccess('Authenticated via Local Trader Profile!');
+            setTimeout(() => {
+              if (onLoginSuccess) onLoginSuccess({ id: existing.id, email: cleanEmail });
+            }, 400);
+            return;
+          } else {
+            setError('Incorrect password for this profile. Please try again.');
+            setLoading(false);
+            return;
+          }
+        } else {
+          // Auto-provision local profile so friends can start immediately
+          const newId = 'trader-' + Math.random().toString(36).substring(2, 9);
+          accounts[cleanEmail] = {
+            id: newId,
+            email: cleanEmail,
+            passwordHash: cleanPassword,
+            createdAt: new Date().toISOString(),
+          };
+          saveLocalAccounts(accounts);
+          setSuccess('Created and authenticated Local Trader Profile!');
+          setTimeout(() => {
+            if (onLoginSuccess) onLoginSuccess({ id: newId, email: cleanEmail });
+          }, 500);
+          return;
+        }
+      } else {
+        // Sign up
+        const newId = 'trader-' + Math.random().toString(36).substring(2, 9);
+        accounts[cleanEmail] = {
+          id: newId,
+          email: cleanEmail,
+          passwordHash: cleanPassword,
+          createdAt: new Date().toISOString(),
+        };
+        saveLocalAccounts(accounts);
+        setSuccess('Account created and saved locally! Entering terminal...');
+        setTimeout(() => {
+          if (onLoginSuccess) onLoginSuccess({ id: newId, email: cleanEmail });
+        }, 500);
+        return;
+      }
+    } catch (localErr: any) {
+      setError(localErr.message || 'Authentication error.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGoogleAuth = async () => {
-    if (!checkConfig()) return;
+  const handleInstantLocalEntry = () => {
+    const targetEmail = email.trim() || 'trader@quantbridge.io';
+    if (onLoginSuccess) {
+      onLoginSuccess({ id: 'local-' + Date.now().toString(36), email: targetEmail });
+    } else if (onGuestAccess) {
+      onGuestAccess();
+    }
+  };
 
+  const handleGoogleAuth = async () => {
     setLoading(true);
     setError('');
     try {
+      if (!isSupabaseConfigured) {
+        handleInstantLocalEntry();
+        return;
+      }
       const { error: googleError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
       });
       if (googleError) throw googleError;
     } catch (err: any) {
       console.error(err);
-      setError(err.message || 'Google authentication failed');
+      setError('OAuth sign in unavailable. Use Instant Demo or Email login below.');
     } finally {
       setLoading(false);
     }
@@ -109,17 +245,18 @@ export const AuthView: React.FC<Props> = ({ onGuestAccess }) => {
             <div className="flex items-center justify-between gap-3 mb-2">
               <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-300">
                 <Zap className="w-4 h-4 text-emerald-400 animate-pulse" />
-                Instant Demo Access
+                Instant Access (No Database Wait)
               </span>
               <span className="text-[10px] font-mono px-2 py-0.5 bg-emerald-500/20 text-emerald-300 rounded font-semibold border border-emerald-500/30">
-                RECOMMENDED
+                ZERO FRICTION
               </span>
             </div>
             <p className="text-[11px] text-slate-300 mb-3 leading-relaxed">
-              Experience the full terminal immediately with live TradingView feeds, virtual execution, and exchange connectors.
+              Launch directly into the execution terminal with live prices, order management, and exchange connectors.
             </p>
             <button
               type="button"
+              id="instant-demo-access-btn"
               onClick={onGuestAccess}
               className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] hover:shadow-[0_0_20px_rgba(16,185,129,0.5)] flex items-center justify-center gap-2 cursor-pointer"
             >
@@ -130,9 +267,18 @@ export const AuthView: React.FC<Props> = ({ onGuestAccess }) => {
         )}
 
         {error && (
-          <div className="mb-5 p-3.5 bg-rose-500/10 border border-rose-500/40 rounded-xl flex items-start gap-3">
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-            <p className="text-xs text-rose-200">{error}</p>
+          <div className="mb-5 p-3.5 bg-rose-500/10 border border-rose-500/40 rounded-xl flex flex-col gap-2">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <p className="text-xs text-rose-200">{error}</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleInstantLocalEntry}
+              className="text-[11px] font-mono text-emerald-400 hover:text-emerald-300 underline text-left cursor-pointer mt-1"
+            >
+              Click here to bypass cloud database and enter immediately &rarr;
+            </button>
           </div>
         )}
 
@@ -174,7 +320,7 @@ export const AuthView: React.FC<Props> = ({ onGuestAccess }) => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all font-mono"
-                placeholder="admin@quantbridge.com"
+                placeholder="trader@quantbridge.com"
               />
             </div>
             <div>
@@ -191,10 +337,11 @@ export const AuthView: React.FC<Props> = ({ onGuestAccess }) => {
             <button
               type="submit"
               disabled={loading}
+              id="auth-submit-btn"
               className="w-full bg-slate-800 hover:bg-slate-700 text-slate-100 font-bold py-2 rounded-xl transition-colors flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed border border-slate-700 text-xs cursor-pointer"
             >
               {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-              {view === 'login' ? 'Authenticate' : 'Sign Up'}
+              {view === 'login' ? 'Sign In' : 'Create Account'}
             </button>
           </form>
 
@@ -233,12 +380,12 @@ export const AuthView: React.FC<Props> = ({ onGuestAccess }) => {
 
         {/* Feature badges footer */}
         <div className="mt-6 pt-4 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500 font-mono">
-          <span className="flex items-center gap-1">
-            <Activity className="w-3 h-3 text-emerald-400" />
-            <span>14ms Sub-20ms</span>
+          <span className="flex items-center gap-1 text-emerald-400">
+            <Database className="w-3 h-3" />
+            <span>Hybrid DB Sync</span>
           </span>
           <span>·</span>
-          <span>Binance · Bybit · OKX</span>
+          <span>Binance · Bybit · Delta · Shark</span>
           <span>·</span>
           <span>Webhooks v5</span>
         </div>

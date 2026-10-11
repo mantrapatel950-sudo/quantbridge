@@ -299,11 +299,22 @@ export async function fetchGitSyncStatus(): Promise<any> {
   return res.json();
 }
 
-export async function triggerGitPull(): Promise<any> {
-  const res = await authFetch('/api/system/git-pull', { method: 'POST' });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Failed to pull updates from GitHub');
-  return data;
+export interface TrustedIpResponse {
+  success: boolean;
+  serverOutboundIp: string;
+  serverIpv4?: string;
+  serverIpv6?: string;
+  clientDeviceIp: string;
+  exchangeReportedIp?: string;
+  whitelistIps: string[];
+  tip: string;
 }
+
+export async function fetchTrustedIp(): Promise<TrustedIpResponse> {
+  const res = await authFetch('/api/network/trusted-ip');
+  if (!res.ok) throw new Error('Failed to fetch trusted IP');
+  return res.json();
+}
+
 
 
