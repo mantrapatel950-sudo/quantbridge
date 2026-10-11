@@ -1,8 +1,8 @@
 {
   "isKillSwitchActive": false,
   "tradingMode": "REAL",
-  "virtualBalance": 99987.620184,
-  "realBalance": 25000,
+  "virtualBalance": 100593.43558899996,
+  "realBalance": 24899.318262999994,
   "riskSettings": {
     "maxDailyLossPercent": 4,
     "maxOpenPositions": 5,
@@ -19,7 +19,7 @@
     "apiSecretMasked": "SK••••••••••••••••••••••••e094",
     "walletBalance": 0,
     "assetBreakdown": [],
-    "lastPingMs": 839,
+    "lastPingMs": 630,
     "connectedAccounts": [
       {
         "broker": "Binance",
@@ -36,12 +36,12 @@
         "isSandbox": false,
         "accountType": "FUTURES",
         "status": "CONNECTED",
-        "lastPingMs": 513,
-        "lastSyncedAt": "2026-10-11T16:53:25.169Z",
+        "lastPingMs": 839,
+        "lastSyncedAt": "2026-10-11T17:00:42.770Z",
         "walletBalance": 0
       }
     ],
-    "lastSyncedAt": "2026-10-11T17:00:42.770Z",
+    "lastSyncedAt": "2026-10-11T19:37:36.278Z",
     "useAllocatedCapital": true
   }
 }

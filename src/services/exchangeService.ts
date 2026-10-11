@@ -1218,7 +1218,7 @@ export async function executeLiveExchangeOrder(
           symbol: formattedSymbol,
           side: side.toUpperCase(),
           type: orderType.toUpperCase(),
-          quantity: qty,
+          quantity: Math.max(0.01, Number(parseFloat(qty.toString()).toFixed(2))),
           placeType: 'ORDER_FORM',
           reduceOnly: false,
           timestamp,

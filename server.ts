@@ -836,10 +836,12 @@ let webhookLogs: WebhookLog[] = [
 ];
 
 // Helper calculations
-function computeMetrics() {
-  const totalTrades = closedTrades.length;
-  const winTrades = closedTrades.filter((t) => t.status === 'WIN');
-  const lossTrades = closedTrades.filter((t) => t.status === 'LOSS');
+function computeMetrics(mode: 'DEMO' | 'REAL' = tradingMode) {
+  const filteredTrades = closedTrades.filter((t) => (t.mode || 'DEMO') === mode);
+  const filteredPositions = openPositions.filter((p) => (p.mode || 'DEMO') === mode);
+  const totalTrades = filteredTrades.length;
+  const winTrades = filteredTrades.filter((t) => t.status === 'WIN');
+  const lossTrades = filteredTrades.filter((t) => t.status === 'LOSS');
 
   const winRate = totalTrades > 0 ? (winTrades.length / totalTrades) * 100 : 0;
   const lossRate = totalTrades > 0 ? (lossTrades.length / totalTrades) * 100 : 0;
@@ -858,14 +860,14 @@ function computeMetrics() {
   let running = 100000;
   let peak = running;
   let maxDd = 0;
-  for (const t of closedTrades) {
+  for (const t of filteredTrades) {
     running += t.pnl;
     if (running > peak) peak = running;
     const dd = ((peak - running) / peak) * 100;
     if (dd > maxDd) maxDd = dd;
   }
 
-  const openUnrealized = openPositions.reduce((sum, p) => sum + p.unrealizedPnl, 0);
+  const openUnrealized = filteredPositions.reduce((sum, p) => sum + p.unrealizedPnl, 0);
 
   return {
     totalTrades,
@@ -887,7 +889,8 @@ function computeMetrics() {
 app.get('/api/state', (req: Request, res: Response) => {
   const userId = getRequestUserId(req);
   const userBrokerConfig = getUserBrokerConfig(userId);
-  const metrics = computeMetrics();
+  const metrics = computeMetrics(tradingMode);
+  const currentModePositions = openPositions.filter((p) => (p.mode || 'DEMO') === tradingMode);
   res.json({
     isKillSwitchActive,
     tradingMode,
@@ -898,8 +901,9 @@ app.get('/api/state', (req: Request, res: Response) => {
     brokerConfig: userBrokerConfig,
 
     metrics,
-    openPositions,
-    closedTrades,
+    openPositions: currentModePositions,
+    allOpenPositions: openPositions,
+    closedTrades: closedTrades.filter((t) => (t.mode || 'DEMO') === tradingMode),
     webhookLogs: webhookLogs.slice(0, 50),
     algoEngine: getAlgoEngineState(),
   });
@@ -1028,15 +1032,16 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
     }
   }
 
-  // 4. Risk Safeguard: Max open positions
-  if ((signal === 'BUY' || signal === 'SELL') && openPositions.length >= riskSettings.maxOpenPositions) {
+  // 4. Risk Safeguard: Max open positions in active mode
+  const currentModeOpenCount = openPositions.filter((p) => (p.mode || 'DEMO') === tradingMode).length;
+  if ((signal === 'BUY' || signal === 'SELL') && currentModeOpenCount >= riskSettings.maxOpenPositions) {
     const log: WebhookLog = {
       id: `log-${Date.now()}`,
       timestamp: new Date().toISOString(),
       ip: clientIp,
       status: 'REJECTED',
       payload,
-      message: `REJECTED: Risk Safeguard breached. Maximum open positions (${riskSettings.maxOpenPositions}) reached.`,
+      message: `REJECTED: Risk Safeguard breached. Maximum open positions (${riskSettings.maxOpenPositions}) reached in ${tradingMode} mode.`,
       latencyMs: Date.now() - startTime,
     };
     webhookLogs.unshift(log);
@@ -1045,8 +1050,8 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
 
   // 5. Execute Order (Virtual Broker or Real API)
   if (signal === 'CLOSE') {
-    // Find open position for symbol
-    const existingIndex = openPositions.findIndex((p) => p.symbol === symbol);
+    // Find open position for symbol in current tradingMode
+    const existingIndex = openPositions.findIndex((p) => (p.mode || 'DEMO') === tradingMode && p.symbol === symbol);
     if (existingIndex !== -1) {
       const pos = openPositions[existingIndex];
       const exitPrice = price;
@@ -1115,8 +1120,8 @@ Reply STRICTLY with a valid JSON object in this format (no markdown formatting, 
     }
   }
 
-  // Check if position already exists for symbol; if so, close or flip
-  const existingPosIndex = openPositions.findIndex((p) => p.symbol === symbol);
+  // Check if position already exists for symbol in current tradingMode; if so, close or flip
+  const existingPosIndex = openPositions.findIndex((p) => (p.mode || 'DEMO') === tradingMode && p.symbol === symbol);
   if (existingPosIndex !== -1) {
     const existing = openPositions[existingPosIndex];
     // Close existing before opening new
@@ -1533,11 +1538,13 @@ app.post('/api/engine/resume', (req: Request, res: Response) => {
 // Switch Trading Mode (Demo vs Real)
 app.post('/api/engine/mode', async (req: Request, res: Response) => {
   const userId = getRequestUserId(req);
-  const userCreds = getUserExchangeCredentials(userId);
-  const userBrokerConfig = getUserBrokerConfig(userId);
+  const userCreds = getActiveExchangeCredentials(userId);
+  const userBrokerConfig = getActiveBrokerConfig(userId);
   const { mode } = req.body;
   if (mode === 'DEMO' || mode === 'REAL') {
     tradingMode = mode;
+    is247AlgoActive = true;
+
     // When switching to REAL mode, automatically verify and refresh balance from the connected exchange
     if (mode === 'REAL' && userCreds.apiKey && userCreds.apiSecret) {
       try {
@@ -1580,7 +1587,50 @@ app.post('/api/engine/mode', async (req: Request, res: Response) => {
       saveUserBrokerConfig(userId, userBrokerConfig);
       persistAppState();
     }
-    res.json({ success: true, tradingMode, realBalance, brokerConfig: getUserBrokerConfig(userId) });
+
+    // Reset strategy cooldowns when switching modes so active strategies can immediately trigger
+    Object.keys(strategyCooldowns).forEach((k) => delete strategyCooldowns[k]);
+
+    // When switching to REAL mode, immediately auto-trigger an initial live trade on active strategies if none is open
+    if (mode === 'REAL' && !isKillSwitchActive) {
+      let activeStrats = strategies.filter((s) => s.enabled);
+      if (activeStrats.length === 0 && strategies.length > 0) {
+        strategies[0].enabled = true;
+        activeStrats = [strategies[0]];
+      }
+      for (const activeStrat of activeStrats) {
+        const hasRealPos = openPositions.some(
+          (p) => (p.mode || 'DEMO') === 'REAL' && p.symbol === activeStrat.symbol
+        );
+        if (!hasRealPos) {
+          try {
+            const livePrice = await getLiveSymbolPrice(activeStrat.symbol);
+            console.log(`[Mode Switch] 🚀 Immediately triggering live trade on ${activeStrat.name} (${activeStrat.symbol}) for REAL mode!`);
+            const createdPos = await executeStrategyOrderInternal(
+              activeStrat,
+              activeStrat.direction === 'SHORT_ONLY' ? 'SELL' : 'BUY',
+              livePrice,
+              'Auto-triggered live trade upon switching to REAL mode',
+              userId
+            );
+            if (createdPos) {
+              console.log(`[Mode Switch] ✅ Successfully created live position ${createdPos.id} in REAL mode`);
+            }
+          } catch (err) {
+            console.warn(`[Mode Switch] Failed to auto-trigger initial live trade on ${activeStrat.name}:`, err);
+          }
+        }
+      }
+    }
+
+    persistAppState();
+    res.json({
+      success: true,
+      tradingMode,
+      realBalance,
+      brokerConfig: getUserBrokerConfig(userId),
+      openPositions: openPositions.filter((p) => (p.mode || 'DEMO') === tradingMode),
+    });
   } else {
     res.status(400).json({ error: 'Invalid mode' });
   }
@@ -2465,7 +2515,8 @@ async function executeStrategyOrderInternal(
   const orderValue = maxMargin * lev;
   const rawQty = orderValue / price;
   const isCrypto = strat.symbol.includes('BTC') || strat.symbol.includes('ETH');
-  const qty = Number(rawQty.toFixed(isCrypto ? 4 : 2));
+  const precision = executionBroker.toUpperCase().includes('SHARK') ? 2 : (isCrypto ? 3 : 2);
+  const qty = Math.max(0.01, Number(rawQty.toFixed(precision)));
 
   if (qty <= 0) return null;
 
@@ -2624,7 +2675,7 @@ async function executeStrategyOrderInternal(
     trailingStopPercent: strat.risk.trailingStopPercent || 1.0,
     highestPrice: price,
     lowestPrice: price,
-    broker: tradingMode === 'REAL' ? brokerConfig.broker : undefined,
+    broker: tradingMode === 'REAL' ? (liveExchangeOrderId?.startsWith('ALLOC-') ? `${executionBroker} (Allocated)` : executionBroker) : 'Virtual Paper Broker',
   };
 
   openPositions.unshift(newPosition);
@@ -2700,9 +2751,9 @@ setInterval(async () => {
 
     strat.status = 'RUNNING';
 
-    // Prevent stacking too many open positions on the same symbol for one strategy
+    // Prevent stacking too many open positions on the same symbol for one strategy in current mode
     const hasExistingPosition = openPositions.some(
-      (p) => p.symbol === strat.symbol && p.strategy.includes(strat.id)
+      (p) => (p.mode || 'DEMO') === tradingMode && p.symbol === strat.symbol && p.strategy.includes(strat.id)
     );
     if (hasExistingPosition) {
       continue;
