@@ -1,5 +1,20 @@
 [
   {
+    "id": "tr-1791735784164-526",
+    "symbol": "XAU/USD",
+    "side": "BUY",
+    "qty": 0.74,
+    "entryPrice": 2686.18,
+    "exitPrice": 2685,
+    "entryTime": "2026-10-10T14:14:35.622Z",
+    "exitTime": "2026-10-11T16:23:04.164Z",
+    "pnl": -0.87,
+    "pnlPercent": -0.04,
+    "strategy": "Gold Safe-Haven Trend Bot [24/7_strat-5] (MANUAL_CLOSE)",
+    "status": "LOSS",
+    "mode": "DEMO"
+  },
+  {
     "id": "tr-1791734216180-85",
     "symbol": "BTC/USDT",
     "side": "SELL",

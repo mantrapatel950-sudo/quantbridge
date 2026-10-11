@@ -7,8 +7,8 @@
     "timeframe": "5m",
     "direction": "BOTH",
     "type": "PINE_SCRIPT",
-    "enabled": false,
-    "status": "PAUSED",
+    "enabled": true,
+    "status": "TRIGGERED",
     "parameters": {
       "emaFastPeriod": 9,
       "emaSlowPeriod": 21,
@@ -34,14 +34,14 @@
       "cooldownMinutes": 5
     },
     "stats": {
-      "totalTrades": 4,
+      "totalTrades": 6,
       "winRate": 0,
       "totalPnl": 0,
-      "lastSignalMessage": "BUY 0.1989 BTC/USDT @ $82,913.52 (AI Executed Pine Script: longCondition == true)",
-      "lastTriggeredAt": "2026-10-10T12:09:52.222Z"
+      "lastSignalMessage": "SELL 5.3645 BTC/USDT @ $83,873.66 (AI Executed Pine Script: shortCondition == true)",
+      "lastTriggeredAt": "2026-10-11T16:35:52.828Z"
     },
     "createdAt": "2026-10-09T12:08:22.660Z",
-    "updatedAt": "2026-10-10T14:10:24.365Z"
+    "updatedAt": "2026-10-11T16:35:43.185Z"
   },
   {
     "id": "strat-1",
@@ -52,7 +52,7 @@
     "direction": "BOTH",
     "type": "EMA_CROSS",
     "enabled": true,
-    "status": "COOLDOWN",
+    "status": "RUNNING",
     "parameters": {
       "emaFastPeriod": 9,
       "emaSlowPeriod": 21,
@@ -76,7 +76,7 @@
       "lastSignalMessage": "SELL 0.0121 BTC/USDT @ $82,833.73 (EMA(9) $82774.48 crossed below EMA(21) $82775.79 · Bearish death cross)"
     },
     "createdAt": "2026-10-01T00:00:00Z",
-    "updatedAt": "2026-10-10T14:10:26.866Z"
+    "updatedAt": "2026-10-11T16:35:40.043Z"
   },
   {
     "id": "strat-2",
@@ -188,8 +188,8 @@
     "timeframe": "1h",
     "direction": "LONG_ONLY",
     "type": "EMA_CROSS",
-    "enabled": true,
-    "status": "TRIGGERED",
+    "enabled": false,
+    "status": "PAUSED",
     "parameters": {
       "emaFastPeriod": 12,
       "emaSlowPeriod": 34,
@@ -212,6 +212,6 @@
       "lastSignalMessage": "BUY 0.74 XAU/USD @ $2,686.18 (EMA(12) $2692.08 crossed above EMA(34) $2683.94 · Trend confirmed)"
     },
     "createdAt": "2026-10-03T00:00:00Z",
-    "updatedAt": "2026-10-10T14:10:54.023Z"
+    "updatedAt": "2026-10-11T16:22:58.527Z"
   }
 ]

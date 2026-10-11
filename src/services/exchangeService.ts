@@ -1219,10 +1219,15 @@ export async function executeLiveExchangeOrder(
           side: side.toUpperCase(),
           type: orderType.toUpperCase(),
           quantity: qty,
+          placeType: 'ORDER_FORM',
+          reduceOnly: false,
           timestamp,
         };
         if (orderType === 'LIMIT' && price) {
           payloadObj.price = price;
+        }
+        if (params.leverage) {
+          payloadObj.leverage = params.leverage;
         }
         const payloadStr = JSON.stringify(payloadObj);
         const signature = crypto.createHmac('sha256', apiSecret).update(payloadStr).digest('hex');
@@ -1268,7 +1273,7 @@ export async function executeLiveExchangeOrder(
             };
           }
 
-          if (data?.message?.includes('expired') || data?.details?.includes('expired')) {
+          if (data?.message?.includes('expired') || data?.details?.includes('expired') || data?.error === '4008') {
             break; // retry outer attempt with updated offset
           }
 
@@ -1276,7 +1281,9 @@ export async function executeLiveExchangeOrder(
             continue; // try next candidate path
           }
 
-          lastErrorMsg = data?.message || data?.details || data?.error || `Shark HTTP ${res.status}`;
+          const detailsStr = Array.isArray(data?.details) ? data.details.join(', ') : (data?.details || '');
+          const msgStr = data?.message || data?.error || '';
+          lastErrorMsg = detailsStr ? `${detailsStr}${msgStr && msgStr !== 'Bad request' ? ` (${msgStr})` : ''}` : (msgStr || `Shark HTTP ${res.status}`);
           break;
         }
       } catch (err: any) {
