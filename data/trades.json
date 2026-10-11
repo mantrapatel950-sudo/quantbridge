@@ -1,5 +1,20 @@
 [
   {
+    "id": "tr-1791734216180-85",
+    "symbol": "BTC/USDT",
+    "side": "SELL",
+    "qty": 0.0121,
+    "entryPrice": 82833.73,
+    "exitPrice": 83784.69,
+    "entryTime": "2026-10-10T14:12:19.377Z",
+    "exitTime": "2026-10-11T15:56:56.180Z",
+    "pnl": -11.51,
+    "pnlPercent": -1.15,
+    "strategy": "Apex EMA Trend Hunter [24/7_strat-1] (TRAILING_STOP_TRIGGERED)",
+    "status": "LOSS",
+    "mode": "DEMO"
+  },
+  {
     "id": "tr-1791641446292-252",
     "symbol": "BTC/USDT",
     "side": "BUY",
