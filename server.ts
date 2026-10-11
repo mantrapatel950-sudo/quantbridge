@@ -2230,19 +2230,41 @@ async function getLiveSymbolPrice(sym: string): Promise<number> {
   return 100;
 }
 
-// Internal executor for automated 24/7 strategy triggers
-function executeStrategyOrderInternal(
+// Helper to get active exchange credentials for background algo bots
+function getActiveExchangeCredentials(userId?: string): StoredExchangeCredentials {
+  if (userId && userId !== 'default') {
+    const u = getUserExchangeCredentials(userId);
+    if (u && u.apiKey && u.apiSecret) return u;
+  }
+  if (exchangeCredentials && exchangeCredentials.apiKey && exchangeCredentials.apiSecret) {
+    return exchangeCredentials;
+  }
+  try {
+    const fs = require('fs');
+    const usersDir = path.join(__dirname, 'data', 'users');
+    if (fs.existsSync(usersDir)) {
+      const dirs = fs.readdirSync(usersDir);
+      for (const d of dirs) {
+        const p = path.join(usersDir, d, 'exchange_credentials.json');
+        if (fs.existsSync(p)) {
+          const creds = JSON.parse(fs.readFileSync(p, 'utf8'));
+          if (creds?.apiKey && creds?.apiSecret) return creds;
+        }
+      }
+    }
+  } catch {}
+  return exchangeCredentials;
+}
+
+// Internal executor for automated 24/7 strategy triggers (routes to real exchanges in REAL mode)
+async function executeStrategyOrderInternal(
   strat: StrategyConfig,
   side: 'BUY' | 'SELL',
   price: number,
-  reason: string
-): Position | null {
+  reason: string,
+  userId?: string
+): Promise<Position | null> {
   if (isKillSwitchActive) return null;
-
-  // Safeguard: Do not auto-execute in REAL mode if exchange wallet has zero funds
-  if (tradingMode === 'REAL' && (realBalance <= 0 || (brokerConfig.walletBalance ?? 0) <= 0)) {
-    return null;
-  }
 
   const currentBal = tradingMode === 'DEMO' ? virtualBalance : realBalance;
   const allocPct = strat.risk.allocationPercent || 5;
@@ -2258,6 +2280,54 @@ function executeStrategyOrderInternal(
   const isLong = side === 'BUY';
   const orderSide: 'LONG' | 'SHORT' = isLong ? 'LONG' : 'SHORT';
   const marginRequired = Number(((price * qty) / lev).toFixed(2));
+
+  let liveExchangeOrderId: string | undefined;
+
+  // ROUTE REAL TRADES AUTOMATICALLY TO CONNECTED BROKER / CRYPTO EXCHANGE
+  if (tradingMode === 'REAL') {
+    const liveBal = brokerConfig.walletBalance ?? 0;
+    const hasFunds = liveBal > 0 || brokerConfig.useAllocatedCapital;
+    if (brokerConfig.status !== 'CONNECTED' || !hasFunds) {
+      console.warn(`[Algo Engine] Cannot auto-trade: ${brokerConfig.broker || 'Exchange'} not connected or has $0 funds.`);
+      return null;
+    }
+
+    const userCreds = getActiveExchangeCredentials(userId);
+    if (!userCreds.apiKey || !userCreds.apiSecret) {
+      console.warn(`[Algo Engine] Cannot auto-trade: No active API Key/Secret found for ${brokerConfig.broker}.`);
+      return null;
+    }
+
+    // Place market order on real exchange API
+    const liveOrderRes = await executeLiveExchangeOrder(userCreds, {
+      symbol: strat.symbol,
+      side,
+      qty,
+      price,
+      leverage: lev,
+      orderType: 'MARKET',
+    });
+
+    if (!liveOrderRes.success) {
+      console.warn(`[Algo Engine] Exchange rejected order for ${strat.name}: ${liveOrderRes.message}`);
+      const rejectLog: AlgoSignalLog = {
+        id: `sig-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        timestamp: new Date().toISOString(),
+        strategyId: strat.id,
+        strategyName: strat.name,
+        symbol: strat.symbol,
+        action: side,
+        price,
+        reason: `EXCHANGE REJECTED: ${liveOrderRes.message}`,
+        executed: false,
+      };
+      algoSignalLogs.unshift(rejectLog);
+      return null;
+    }
+
+    liveExchangeOrderId = liveOrderRes.orderId;
+    console.log(`[Algo Engine] LIVE REAL ORDER EXECUTED on ${userCreds.broker}! Order ID: ${liveExchangeOrderId}`);
+  }
 
   // Compute SL and TP from strategy risk parameters
   const slPct = strat.risk.stopLossPercent || 1.5;
@@ -2294,6 +2364,7 @@ function executeStrategyOrderInternal(
     trailingStopPercent: strat.risk.trailingStopPercent || 1.0,
     highestPrice: price,
     lowestPrice: price,
+    broker: tradingMode === 'REAL' ? brokerConfig.broker : undefined,
   };
 
   openPositions.unshift(newPosition);
@@ -2493,7 +2564,7 @@ setInterval(async () => {
     }
 
     if (isTriggered) {
-      executeStrategyOrderInternal(strat, signalSide, livePrice, signalReason);
+      await executeStrategyOrderInternal(strat, signalSide, livePrice, signalReason);
     }
   }
 }, 4000);
@@ -2680,7 +2751,7 @@ app.post('/api/algo/strategies/:id/trigger-now', async (req: Request, res: Respo
   const side = strat.direction === 'SHORT_ONLY' ? 'SELL' : 'BUY';
   const reason = `Manual Test Trigger: Verified all ${strat.type} condition parameters & execution routing`;
 
-  const newPosition = executeStrategyOrderInternal(strat, side, livePrice, reason);
+  const newPosition = await executeStrategyOrderInternal(strat, side, livePrice, reason, getRequestUserId(req));
 
   if (!newPosition) {
     return res.status(400).json({ error: 'Failed to execute order (check kill switch or available margin)' });
